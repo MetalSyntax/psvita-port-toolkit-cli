@@ -17,6 +17,23 @@ lists whatever it finds alongside the 4 universal presets. A flag simply doesn't
 that specific port's `build.sh` defines it — no per-engine special-casing lives in this toolkit
 at all.
 
+## Why `_run_build()` falls back to plain `cmake`+`make`
+
+Not every port under `BASE_DIR` was created by this toolkit's `init_port.py` (which clones
+`soloader-boilerplate`, and that scaffold ships a root `build.sh`). A port adopted from before
+this toolkit existed — one that was always built by hand with `cmake . && make` directly, with
+no wrapper script ever written — has no `build.sh` at all, and the wizard used to just fail with
+"couldn't find build.sh" for those projects, even though building them is perfectly possible.
+
+`_run_build()` now distinguishes two cases: `build.sh` **exists but isn't executable** (a real
+problem, likely a lost `chmod +x` — still reported as an error), versus `build.sh` **doesn't
+exist at all** (a legacy/adopted project), which falls back to `_run_cmake_direct()`: run
+`cmake <project_dir>` then `make -jN` directly inside the project's `build_dir`, reusing
+whatever CMake cache is already there if the project was previously built manually in that same
+folder. The preset still maps to `-DCMAKE_BUILD_TYPE=...` in this path; project-specific extra
+flags (auto-discovered from `build.sh` for boilerplate-based ports) simply don't exist for these
+projects, since there's no `build.sh` to scan.
+
 ## Why `UNIVERSAL_PRESETS` stores i18n keys, not resolved text
 
 `UNIVERSAL_PRESETS` is a module-level list, built once at import time — which happens before

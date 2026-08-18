@@ -124,6 +124,16 @@ STRINGS = {
         "en": "[-] Couldn't find (or it's not executable) {build_sh}.",
         "pt": "[-] Não foi encontrado (ou não é executável) {build_sh}.",
     },
+    "build_deploy.no_build_sh_fallback": {
+        "es": "[!] Este proyecto no tiene build.sh (port legacy) -- compilando directo con CMake en {build_dir}",
+        "en": "[!] This project has no build.sh (legacy port) -- building directly with CMake in {build_dir}",
+        "pt": "[!] Este projeto não tem build.sh (port legado) -- compilando diretamente com CMake em {build_dir}",
+    },
+    "build_deploy.cmake_configure_failed": {
+        "es": "[-] cmake falló al configurar -- revisar el output de arriba.",
+        "en": "[-] cmake failed to configure -- check the output above.",
+        "pt": "[-] O cmake falhou ao configurar -- verifique a saída acima.",
+    },
     "build_deploy.running_command": {
         "es": "[*] Ejecutando: {cmd}",
         "en": "[*] Running: {cmd}",
@@ -359,17 +369,68 @@ def _choose_preset(build_sh_path):
     return None, None
 
 
-def _run_build(project_dir, preset, extra_args):
+_CMAKE_BUILD_TYPES = {
+    "debug": "Debug",
+    "release": "Release",
+    "relwithdebinfo": "RelWithDebInfo",
+    "minsizerel": "MinSizeRel",
+}
+
+
+def _run_cmake_direct(project_dir, build_dir, preset, extra_args):
     """!
-    @brief Run the project's `build.sh` with the chosen preset and extra args.
+    @brief Fallback build path for projects with no `build.sh`: run `cmake`
+           then `make` directly in `build_dir`.
+    @param project_dir Path to the project directory (passed to `cmake` as
+           the source dir).
+    @param build_dir Build output directory, relative to `project_dir`
+           (created if missing; reuses its CMake cache if already configured).
+    @param preset Preset value; mapped to `-DCMAKE_BUILD_TYPE=...` unless
+           `"custom"` or falsy.
+    @param extra_args Extra arguments appended to the `cmake` invocation.
+    @return `True` if both `cmake` and `make` exited with code 0.
+    @note Legacy ports adopted from before this toolkit (created by hand with
+          `cmake`/`make` directly, never from `soloader-boilerplate`) have no
+          `build.sh` at all -- see `docs/dev-notes/build_deploy.md`.
+    """
+    build_path = project_dir / build_dir
+    build_path.mkdir(parents=True, exist_ok=True)
+    print(f"{C.YELLOW}{t('build_deploy.no_build_sh_fallback', build_dir=build_path)}{C.RESET}")
+
+    cmake_args = ["cmake", str(project_dir)]
+    if preset and preset != "custom":
+        cmake_args.append(f"-DCMAKE_BUILD_TYPE={_CMAKE_BUILD_TYPES.get(preset, 'Release')}")
+    cmake_args.extend(extra_args or [])
+    print(f"{t('build_deploy.running_command', cmd=' '.join(cmake_args))}\n")
+    r = subprocess.run(cmake_args, cwd=build_path)
+    if r.returncode != 0:
+        print(f"{C.RED}{t('build_deploy.cmake_configure_failed')}{C.RESET}")
+        return False
+
+    jobs = subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True, text=True).stdout.strip() or "4"
+    make_args = ["make", f"-j{jobs}"]
+    print(f"\n{t('build_deploy.running_command', cmd=' '.join(make_args))}\n")
+    r = subprocess.run(make_args, cwd=build_path)
+    return r.returncode == 0
+
+
+def _run_build(project_dir, preset, extra_args, build_dir="build"):
+    """!
+    @brief Run the project's `build.sh` with the chosen preset and extra args,
+           falling back to a direct `cmake`+`make` invocation if the project
+           has no `build.sh`.
     @param project_dir Path to the project directory.
     @param preset Preset value to pass as the first argument to `build.sh`
                   (omitted if `"custom"` or falsy).
     @param extra_args Extra list of arguments to append after the preset.
-    @return `True` if `build.sh` exited with code 0.
+    @param build_dir Build output directory, relative to `project_dir` --
+           only used by the `build.sh`-less fallback path.
+    @return `True` if the build exited with code 0.
     """
     build_sh = project_dir / "build.sh"
-    if not build_sh.exists() or not os.access(build_sh, os.X_OK):
+    if not build_sh.exists():
+        return _run_cmake_direct(project_dir, build_dir, preset, extra_args)
+    if not os.access(build_sh, os.X_OK):
         print(f"{C.RED}{t('build_deploy.build_sh_not_found', build_sh=build_sh)}{C.RESET}")
         return False
     args = ["bash", str(build_sh)]
@@ -524,7 +585,7 @@ def build_and_deploy_wizard(project_cfg, global_cfg):
     print(f"  {t('build_deploy.building_header', game_name=project_cfg['game_name'], preset=preset, target=target)}")
     print(f"{C.CYAN}{C.BOLD}================================================================{C.RESET}\n")
 
-    ok = _run_build(project_dir, preset, extra_args)
+    ok = _run_build(project_dir, preset, extra_args, project_cfg.get("build_dir", "build"))
     if not ok:
         print(f"{C.RED}{t('build_deploy.build_failed')}{C.RESET}")
         return
