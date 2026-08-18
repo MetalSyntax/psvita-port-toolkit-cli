@@ -502,7 +502,7 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
 
     tmp_root, tmp_src, tmp_build = _stage_in_tmp(project_dir, build_dir)
     try:
-        cmake_args = ["cmake", str(tmp_src)]
+        cmake_args = ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5", str(tmp_src)]
         if preset and preset != "custom":
             cmake_args.append(f"-DCMAKE_BUILD_TYPE={_CMAKE_BUILD_TYPES.get(preset, 'Release')}")
         cmake_args.extend(extra_args or [])

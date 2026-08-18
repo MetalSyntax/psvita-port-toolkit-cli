@@ -105,6 +105,7 @@ psvita_toolkit/
   livearea.py         # conversor de assets de LiveArea
   crash_analyzer.py   # analizador de .psp2dmp (vita-parse-core)
   utils.py            # limpieza, re-decompilación, tests, símbolos, docs
+  gen_docs.py         # generación de skeletons Doxygen y docs/api/ markdown
 ```
 
 Cada port solo necesita un archivo `.psvita-toolkit.json` en su raíz (auto-generado al crear el
@@ -115,13 +116,13 @@ copia de scripts dentro del repo del port.
 
 Los comentarios/docstrings del código están en inglés, formato Doxygen (`"""! @brief/@param/@return`),
 y separados del racional de diseño ("por qué" -- decisiones, bugs reales encontrados) que vive en
-`docs/dev-notes/<módulo>.md`. `dev-tools/gen_docs.py` automatiza la parte mecánica de mantener esto
-sin gastar tokens de LLM en cada cambio:
+`docs/dev-notes/<módulo>.md`. `gen_docs.py` automatiza la parte mecánica de mantener esto
+sin gastar tokens de LLM en cada cambio (disponible también desde la TUI en el menú de **Utilidades**):
 
 ```bash
-python3 dev-tools/gen_docs.py --check           # lista símbolos sin docstring (para CI)
-python3 dev-tools/gen_docs.py --skeletons-only   # inserta skeletons Doxygen faltantes
-python3 dev-tools/gen_docs.py --api-only         # genera docs/api/<módulo>.md (referencia, no versionado)
+python3 psvita_toolkit/gen_docs.py --check           # lista símbolos sin docstring (para CI)
+python3 psvita_toolkit/gen_docs.py --skeletons-only   # inserta skeletons Doxygen faltantes
+python3 psvita_toolkit/gen_docs.py --api-only         # genera docs/api/<módulo>.md (referencia, no versionado)
 ```
 
 Usa `doxygen`/`doxybook2` si están instalados (`brew install doxygen`); si no, cae a un extractor

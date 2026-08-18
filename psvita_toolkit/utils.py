@@ -156,6 +156,46 @@ STRINGS = {
         "en": "  {color_dim}(no matches for '{pattern}'){color_reset}",
         "pt": "  {color_dim}(sem correspondências para '{pattern}'){color_reset}",
     },
+    "utils.gen_docs_checking": {
+        "es": "[*] Verificando docstrings en módulos del toolkit...",
+        "en": "[*] Checking docstrings in toolkit modules...",
+        "pt": "[*] Verificando docstrings nos módulos do toolkit...",
+    },
+    "utils.gen_docs_missing_line": {
+        "es": "  {color_yellow}- {name}: {count} símbolo(s) sin docstring{color_reset}",
+        "en": "  {color_yellow}- {name}: {count} symbol(s) missing docstrings{color_reset}",
+        "pt": "  {color_yellow}- {name}: {count} símbolo(s) sem docstring{color_reset}",
+    },
+    "utils.gen_docs_all_documented": {
+        "es": "{color_green}[+] ¡Todos los símbolos están documentados!{color_reset}",
+        "en": "{color_green}[+] All symbols are documented!{color_reset}",
+        "pt": "{color_green}[+] Todos os símbolos estão documentados!{color_reset}",
+    },
+    "utils.gen_docs_total_missing": {
+        "es": "\n{color_yellow}[!] Total: {count} símbolo(s) sin docstring.{color_reset}",
+        "en": "\n{color_yellow}[!] Total: {count} symbol(s) missing docstrings.{color_reset}",
+        "pt": "\n{color_yellow}[!] Total: {count} símbolo(s) sem docstring.{color_reset}",
+    },
+    "utils.gen_docs_generating_api": {
+        "es": "\n[*] Generando referencia API en docs/api/...",
+        "en": "\n[*] Generating API reference in docs/api/...",
+        "pt": "\n[*] Gerando referência de API em docs/api/...",
+    },
+    "utils.gen_docs_using_doxygen": {
+        "es": "[*] doxygen encontrado ({bin}) -- usando herramienta nativa.",
+        "en": "[*] doxygen found ({bin}) -- using native tool.",
+        "pt": "[*] doxygen encontrado ({bin}) -- usando ferramenta nativa.",
+    },
+    "utils.gen_docs_using_fallback": {
+        "es": "[*] doxygen no instalado (o sin doxybook2) -- usando extractor AST fallback.",
+        "en": "[*] doxygen not installed (or missing doxybook2) -- using fallback AST extractor.",
+        "pt": "[*] doxygen não instalado (ou sem doxybook2) -- usando extrator AST de fallback.",
+    },
+    "utils.gen_docs_done": {
+        "es": "{color_green}[+] docs/api/*.md generado para {count} módulo(s).{color_reset}",
+        "en": "{color_green}[+] docs/api/*.md generated for {count} module(s).{color_reset}",
+        "pt": "{color_green}[+] docs/api/*.md gerado para {count} módulo(s).{color_reset}",
+    },
 }
 i18n.register(STRINGS)
 
@@ -369,3 +409,39 @@ def search_symbols(project_cfg, global_cfg, pattern, so_relpath=None):
                 print(f"  {line}")
         else:
             print(t("utils.symbols_no_matches", color_dim=C.DIM, pattern=pattern, color_reset=C.RESET))
+
+
+def generate_toolkit_docs():
+    """!
+    @brief Check Doxygen docstrings and generate markdown API reference docs
+           for all modules in the toolkit.
+    """
+    from . import gen_docs
+
+    print(t("utils.gen_docs_checking"))
+    total_missing = 0
+    for py_file in gen_docs.iter_py_files():
+        missing = gen_docs.find_missing_docstrings(py_file)
+        if missing:
+            total_missing += len(missing)
+            print(t("utils.gen_docs_missing_line", color_yellow=C.YELLOW, name=py_file.name, count=len(missing), color_reset=C.RESET))
+
+    if not total_missing:
+        print(t("utils.gen_docs_all_documented", color_green=C.GREEN, color_reset=C.RESET))
+    else:
+        print(t("utils.gen_docs_total_missing", color_yellow=C.YELLOW, count=total_missing, color_reset=C.RESET))
+
+    doxygen_bin = gen_docs.find_doxygen()
+    doxybook2_bin = gen_docs.find_doxybook2()
+    print(t("utils.gen_docs_generating_api"))
+    used_real_tool = False
+    if doxygen_bin:
+        print(t("utils.gen_docs_using_doxygen", bin=doxygen_bin))
+        used_real_tool = gen_docs.generate_api_docs_with_doxygen(doxygen_bin, doxybook2_bin)
+    else:
+        print(t("utils.gen_docs_using_fallback"))
+
+    if not used_real_tool:
+        count = gen_docs.generate_api_docs_fallback()
+        print(t("utils.gen_docs_done", color_green=C.GREEN, count=count, color_reset=C.RESET))
+

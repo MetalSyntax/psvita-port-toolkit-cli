@@ -25,6 +25,7 @@ from . import livearea
 from . import project
 from . import tui
 from . import utils
+from . import zenonia2_tools
 from .i18n import t
 from .tui import C
 
@@ -128,6 +129,11 @@ STRINGS = {
         "es": "🌐 Traducir los .md del proyecto en lote (deep-translator)",
         "en": "🌐 Batch-translate the project's .md files (deep-translator)",
         "pt": "🌐 Traduzir os .md do projeto em lote (deep-translator)",
+    },
+    "main.utils.gen_docs": {
+        "es": "📚 Generar documentación del toolkit (skeletons + API markdown)",
+        "en": "📚 Generate toolkit documentation (skeletons + API markdown)",
+        "pt": "📚 Gerar documentação do toolkit (skeletons + API markdown)",
     },
     "main.ask_reference_dir": {
         "es": "Carpeta local de referencia de assets (relativa al proyecto) [assets]: ",
@@ -262,7 +268,11 @@ def _utils_submenu(project_cfg, global_cfg):
         (t("main.utils.verify_assets"),
          lambda: ftp_ops.verify_data_assets(project_cfg, global_cfg, _ask_reference_dir())),
         (t("main.utils.translate_docs"), lambda: utils.translate_docs(project_cfg, _ask_lang())),
+        (t("main.utils.gen_docs"), utils.generate_toolkit_docs),
     ]
+    if project_cfg.get("slug") == "zenonia-2" or project_cfg.get("titleid") == "PSVZ00002" or "zenonia" in project_cfg.get("game_name", "").lower():
+        items.append(("⚔️  " + t("zen2.menu_title"), lambda: zenonia2_tools.zenonia2_menu(project_cfg)))
+
     tui.run_menu(
         t("main.utils.title"),
         items,
