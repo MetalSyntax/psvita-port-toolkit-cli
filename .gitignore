@@ -10,6 +10,13 @@ __pycache__/
 .venv/
 venv/
 
+# Generated API reference (regenerate with dev-tools/gen_docs.py --api-only) --
+# docs/dev-notes/ is hand-written and committed, docs/api/ is a build artifact.
+/docs/api/
+
+# doxygen scratch output, if the real tool is used instead of the fallback
+/docs/doxygen-xml/
+
 # IDE
 .vscode/
 .idea/

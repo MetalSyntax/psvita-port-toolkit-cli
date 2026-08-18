@@ -111,3 +111,20 @@ psvita_toolkit/
 Cada port solo necesita un archivo `.psvita-toolkit.json` en su raíz (auto-generado al crear el
 port, o al adoptar uno existente) para que el toolkit sepa operar sobre él. No hace falta ninguna
 copia de scripts dentro del repo del port.
+
+## Documentación del código (para mantenedores)
+
+Los comentarios/docstrings del código están en inglés, formato Doxygen (`"""! @brief/@param/@return`),
+y separados del racional de diseño ("por qué" -- decisiones, bugs reales encontrados) que vive en
+`docs/dev-notes/<módulo>.md`. `dev-tools/gen_docs.py` automatiza la parte mecánica de mantener esto
+sin gastar tokens de LLM en cada cambio:
+
+```bash
+python3 dev-tools/gen_docs.py --check           # lista símbolos sin docstring (para CI)
+python3 dev-tools/gen_docs.py --skeletons-only   # inserta skeletons Doxygen faltantes
+python3 dev-tools/gen_docs.py --api-only         # genera docs/api/<módulo>.md (referencia, no versionado)
+```
+
+Usa `doxygen`/`doxybook2` si están instalados (`brew install doxygen`); si no, cae a un extractor
+propio basado en `ast` (sin dependencias) que da el mismo resultado para este proyecto.
+`docs/dev-notes/` sigue siendo 100% escrito a mano -- ninguna herramienta puede generar el "por qué".
