@@ -1,10 +1,14 @@
-"""
-Selección / adopción / creación de proyectos ("ports").
+"""!
+@file project.py
+@brief Project selection, adoption, and creation screen.
 
-Este módulo resuelve la primera pantalla del toolkit: "¿con qué port querés
-trabajar?" -- continuar con uno existente (detectado automáticamente bajo
-BASE_DIR, elegido de los recientes, o por ruta manual), o crear uno nuevo
-desde cero (delega en init_port.py).
+@details
+Entry screen of the toolkit: continue with an existing port (auto-detected under
+`BASE_DIR`, picked from the recents list, or given as a manual path), or create a
+new one from scratch (delegates to `init_port.py`).
+
+See `docs/dev-notes/project.md` for the rationale behind the adoption flow and the
+main menu loop's `result_holder` closure trick.
 """
 
 from pathlib import Path
@@ -201,6 +205,10 @@ i18n.register(STRINGS)
 
 
 def _print_project_table(projects):
+    """!
+    @brief Print the numbered table of detected projects (name, status, path).
+    @param projects List of dicts as returned by `cfgmod.discover_projects()`.
+    """
     print(f"  {C.BOLD}{'#':<4}{t('project.col_name'):<28}{t('project.col_status'):<14}{t('project.col_path')}{C.RESET}")
     print(f"  {'-' * 4}{'-' * 28}{'-' * 14}{'-' * 30}")
     for i, p in enumerate(projects, 1):
@@ -210,9 +218,14 @@ def _print_project_table(projects):
 
 
 def _adopt_project(project_dir):
-    """Un port viejo (o cualquier carpeta que 'parece' un port) sin
-    .psvita-toolkit.json todavía: auto-detecta lo que se pueda y confirma
-    con el usuario antes de guardar la config."""
+    """!
+    @brief Interactive wizard to adopt a port that has no `.psvita-toolkit.json` yet.
+    @details Pre-fills each field with `cfgmod.autodetect_legacy_fields()`'s best-effort
+             guess and lets the user confirm or correct every value before saving.
+    @param project_dir Path to the port directory being adopted.
+    @return The new per-project config dict (same shape as
+            `cfgmod.new_project_config()`'s output), with `_project_dir` set.
+    """
     guess = cfgmod.autodetect_legacy_fields(project_dir)
 
     tui.clear()
@@ -248,6 +261,13 @@ def _adopt_project(project_dir):
 
 
 def _select_from_list(global_cfg):
+    """!
+    @brief List detected ports under `global_cfg`'s `base_dir` and let the user pick
+           one, enter a manual path, or go back.
+    @param global_cfg The global config dict (reads `base_dir` and `boilerplate_dir`).
+    @return The opened project's config dict (see `_open_project()`), or `None` if
+            the user chose to go back.
+    """
     base_dir = global_cfg.get("base_dir", "")
     exclude = [global_cfg.get("boilerplate_dir", "")]
     projects = cfgmod.discover_projects(base_dir, exclude_dirs=exclude) if base_dir else []
@@ -291,10 +311,13 @@ def _open_project(project_dir):
 
 
 def select_or_create_project(global_cfg):
-    """Pantalla de entrada del toolkit. Devuelve un dict de config de
-    proyecto listo para usar (con '_project_dir' seteado), o None si el
-    usuario eligió salir."""
-    from . import init_port  # import diferido: evita ciclos, init_port no se necesita si no se crea nada
+    """!
+    @brief Toolkit's entry screen: continue / pick / adopt / create a project.
+    @param global_cfg Global config dict.
+    @return Ready-to-use per-project config dict (with `_project_dir` set),
+            or `None` if the user chose to exit.
+    """
+    from . import init_port  # deferred import: avoids a cycle, init_port isn't needed unless creating a new port
 
     last = global_cfg.get("last_project")
     recent_valid = last and Path(last).is_dir()
@@ -357,7 +380,7 @@ def select_or_create_project(global_cfg):
                 cb()
                 if result_holder.get("value"):
                     return result_holder["value"]
-                break  # volver a redibujar el menú de selección de proyecto
+                break  # redraw the project-selection menu
             elif c == "\x03":
                 return None
             elif c.isdigit():

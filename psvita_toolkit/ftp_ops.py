@@ -1,12 +1,18 @@
-"""
-Todo lo que habla FTP con la PS Vita (VitaShell ftpd): subir VPK/eboot,
-bajar logs/crash dumps (el último, elegir uno de la lista remota, o elegir
-uno del historial local ya descargado -- la "memoria" local), sincronizar
-shaders, verificar assets de datos, chequear libshacccg.suprx.
+"""!
+@file ftp_ops.py
+@brief FTP operations against the PS Vita's VitaShell ftpd: upload VPK/eboot, download
+       logs/crash dumps, sync shaders, verify data assets, and check libshacccg.suprx health.
 
-Generalizado de manage_vita.py (versión más evolucionada, la de Advena):
-en vez de constantes hardcodeadas al tope del archivo, todo sale de la
-config del proyecto activo (project_cfg / project_dir).
+@details
+Covers connecting to the console (with an optional VPN-bypass local route), uploading a
+built VPK or a lone eboot.bin for fast iteration, downloading the latest / a chosen / a
+previously-downloaded log or crash dump, GLSL <-> CG shader sync, and a shallow data-asset
+integrity check.
+
+Everything reads from the active project's config (`project_cfg` / `project_dir`) instead
+of hardcoded constants -- see `docs/dev-notes/ftp_ops.md` for why, plus the rationale behind
+the VPN bypass, the shallow (non-recursive) asset comparison, and the three log/crash-dump
+download modes.
 """
 
 import socket
@@ -421,13 +427,17 @@ i18n.register(STRINGS)
 
 
 # ---------------------------------------------------------------------------
-# Conexión
+# Connection
 # ---------------------------------------------------------------------------
 
 def disconnect_vpn(global_cfg):
-    """Best-effort: si el usuario configuró un comando de VPN a desconectar
-    antes de hablar por FTP (ej. una VPN que enruta todo el tráfico y rompe
-    la conexión LAN a la Vita), lo corre. Sin config, no hace nada."""
+    """!
+    @brief Best-effort disconnect of a user-configured VPN before talking FTP.
+    @param global_cfg Global config dict; reads the optional `vpn_disconnect_cmd` key.
+    @note No-op if `vpn_disconnect_cmd` isn't set. See docs/dev-notes/ftp_ops.md for why a
+          VPN might need disconnecting at all (full-tunnel VPNs breaking the LAN route to
+          the Vita).
+    """
     cmd = global_cfg.get("vpn_disconnect_cmd")
     if not cmd:
         return
@@ -445,8 +455,13 @@ def disconnect_vpn(global_cfg):
 
 
 def _local_ip_for_route(vita_ip):
-    """Si la Vita está en una subred /24 local, forzar el socket a salir por
-    la IP física en esa subred (en vez de una posible ruta de VPN)."""
+    """!
+    @brief Find the local IP address that reaches the Vita's LAN subnet directly.
+    @param vita_ip The test PS Vita's IP address.
+    @return The local IP in the same /24 subnet as `vita_ip`, or `None` if not found.
+    @note Used to force the FTP socket to bind to this address instead of a possibly-active
+          VPN's tunnel interface. See docs/dev-notes/ftp_ops.md for the VPN-bypass rationale.
+    """
     prefix = ".".join(vita_ip.split(".")[:3]) + "."
     try:
         hostname = socket.gethostname()
@@ -466,6 +481,12 @@ def _local_ip_for_route(vita_ip):
 
 
 def connect_ftp(project_cfg, global_cfg=None):
+    """!
+    @brief Open an FTP connection to the project's configured test PS Vita.
+    @param project_cfg Active project config dict (`vita_ip`, `vita_port`).
+    @param global_cfg Unused by this function; kept for call-site symmetry with `_connect()`.
+    @return An anonymous, logged-in `ftplib.FTP` instance, or `None` on failure.
+    """
     vita_ip = project_cfg["vita_ip"]
     vita_port = project_cfg.get("vita_port", 1337)
     print(t("ftp_ops.connecting", ip=vita_ip, port=vita_port))
@@ -485,12 +506,23 @@ def connect_ftp(project_cfg, global_cfg=None):
 
 
 def _connect(project_cfg, global_cfg):
+    """!
+    @brief Disconnect any configured VPN, then open the FTP connection.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict (used for `vpn_disconnect_cmd`).
+    @return An `ftplib.FTP` instance, or `None` on failure.
+    """
     if global_cfg:
         disconnect_vpn(global_cfg)
     return connect_ftp(project_cfg)
 
 
 def create_dir_if_missing(ftp, path):
+    """!
+    @brief Ensure `path` exists on the Vita, creating intermediate directories as needed.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param path Absolute remote path (e.g. `/ux0:/data/<slug>`).
+    """
     try:
         ftp.cwd(path)
         return
@@ -513,9 +545,15 @@ def create_dir_if_missing(ftp, path):
 
 
 def _list_entries(ftp, path):
-    """(nombre, es_dir, mtime_epoch_o_None) de 'path'. cwd() primero (falla
-    claro si no existe) y MLSD/LIST sin argumentos después -- pasarle el path
-    completo a LIST confunde al ftpd de VitaShell."""
+    """!
+    @brief List the entries of a remote directory.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param path Remote directory to list.
+    @return list of `(name, is_dir, mtime_or_None)` tuples.
+    @note Calls `cwd()` first (fails clearly if the path doesn't exist), then tries `MLSD`
+          and falls back to plain `LIST` -- passing the full path as an argument to `LIST`
+          confuses VitaShell's ftpd.
+    """
     ftp.cwd(path)
     entries = []
     try:
@@ -541,10 +579,15 @@ def _list_entries(ftp, path):
 
 
 # ---------------------------------------------------------------------------
-# VPKs locales (para elegir cuál subir)
+# Local VPKs (to pick which one to upload)
 # ---------------------------------------------------------------------------
 
 def _vpk_desc(filename):
+    """!
+    @brief Build a short display tag for a VPK based on keywords in its filename.
+    @param filename VPK filename to inspect.
+    @return A bracketed tag string (e.g. `" [Release]"`), or `""` if no keyword matches.
+    """
     lower = filename.lower()
     tags = {
         "debug_verbose": t("ftp_ops.vpk_tag_debug_verbose"),
@@ -562,6 +605,12 @@ def _vpk_desc(filename):
 
 
 def list_local_vpks(project_dir, build_dir="build"):
+    """!
+    @brief List local `.vpk` files in the project's build directory.
+    @param project_dir Path to the project directory.
+    @param build_dir Build output subdirectory, relative to `project_dir`.
+    @return list of `Path`s, newest first.
+    """
     build_path = Path(project_dir) / build_dir
     if not build_path.is_dir():
         return []
@@ -571,6 +620,11 @@ def list_local_vpks(project_dir, build_dir="build"):
 
 
 def choose_vpk(project_cfg):
+    """!
+    @brief Interactive picker for which local VPK to upload.
+    @param project_cfg Active project config dict.
+    @return The chosen `Path`, or `None` if cancelled, none found, or an invalid choice.
+    """
     project_dir = project_cfg["_project_dir"]
     build_dir = project_cfg.get("build_dir", "build")
     vpks = list_local_vpks(project_dir, build_dir)
@@ -598,10 +652,15 @@ def choose_vpk(project_cfg):
 
 
 # ---------------------------------------------------------------------------
-# Subida: VPK / eboot
+# Upload: VPK / eboot
 # ---------------------------------------------------------------------------
 
 def upload_vpk(project_cfg, global_cfg):
+    """!
+    @brief Upload the chosen local VPK to the Vita's downloads folder.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict (VPN bypass, etc).
+    """
     local_vpk = choose_vpk(project_cfg)
     if not local_vpk:
         return
@@ -624,6 +683,12 @@ def upload_vpk(project_cfg, global_cfg):
 
 
 def upload_eboot(project_cfg, global_cfg):
+    """!
+    @brief Upload only `eboot.bin` to `ux0:app/<titleid>/`, for a fast iterate cycle.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict (VPN bypass, etc).
+    @note Requires user confirmation before overwriting the installed eboot.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     eboot = project_dir / project_cfg.get("build_dir", "build") / "eboot.bin"
     if not eboot.exists():
@@ -657,6 +722,10 @@ def upload_eboot(project_cfg, global_cfg):
 
 
 def _quit(ftp):
+    """!
+    @brief Best-effort FTP QUIT, swallowing any error.
+    @param ftp Connected `ftplib.FTP` instance to close.
+    """
     try:
         ftp.quit()
     except Exception:
@@ -664,18 +733,28 @@ def _quit(ftp):
 
 
 # ---------------------------------------------------------------------------
-# Descarga de logs / crash dumps: último, elegir de la lista remota, o
-# historial local ya descargado ("memoria").
+# Log / crash dump download: latest, pick from the remote list, or local
+# history already downloaded ("memoria").
 # ---------------------------------------------------------------------------
 
 def _local_logs_dir(project_cfg):
+    """!
+    @brief Path to the project's local logs directory, creating it if needed.
+    @param project_cfg Active project config dict.
+    @return `Path` to `<project_dir>/logs`.
+    """
     d = Path(project_cfg["_project_dir"]) / "logs"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def list_remote_logs(ftp, project_cfg):
-    """Lista (nombre, mtime) de logs .txt en VITA_LOGS_DIR, más reciente primero."""
+    """!
+    @brief List `.txt` logs in the Vita's configured logs directory.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param project_cfg Active project config dict (`vita_logs_dir`).
+    @return list of `(name, mtime)` tuples, newest first.
+    """
     vita_logs_dir = project_cfg.get("vita_logs_dir", "/ux0:/data")
     entries = _list_entries(ftp, vita_logs_dir)
     logs = [(name, mtime) for name, is_dir, mtime in entries
@@ -685,7 +764,12 @@ def list_remote_logs(ftp, project_cfg):
 
 
 def list_remote_dumps(ftp, project_cfg):
-    """Lista (nombre, mtime) de crash dumps (psp2core*/.dmp) en VITA_DATA_DIR."""
+    """!
+    @brief List crash dumps (`psp2core*`/`.dmp`) in the Vita's configured data directory.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param project_cfg Active project config dict (`vita_data_dir`).
+    @return list of `(name, mtime)` tuples, newest first.
+    """
     vita_data_dir = project_cfg.get("vita_data_dir", "/ux0:/data")
     entries = _list_entries(ftp, vita_data_dir)
     dumps = [(name, mtime) for name, is_dir, mtime in entries
@@ -695,14 +779,25 @@ def list_remote_dumps(ftp, project_cfg):
 
 
 def _download_remote_file(ftp, remote_dir, remote_name, local_path):
+    """!
+    @brief Download a single remote file to a local path.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param remote_dir Remote directory containing the file.
+    @param remote_name Remote filename.
+    @param local_path Local destination path.
+    """
     ftp.cwd(remote_dir)
     with open(local_path, "wb") as f:
         ftp.retrbinary(f"RETR {remote_name}", f.write)
 
 
 def list_local_history(project_cfg, kind="logs"):
-    """'Memoria' local: lo ya descargado antes a <project_dir>/logs/, más
-    reciente primero. kind: 'logs' (.txt) o 'dumps' (psp2core*/.dmp/.analysis.txt)."""
+    """!
+    @brief List previously downloaded logs/dumps kept in `<project_dir>/logs/`.
+    @param project_cfg Active project config dict.
+    @param kind `"logs"` for `.txt` files, or `"dumps"` for `psp2core*`/`.dmp` files.
+    @return list of `Path`s, newest first.
+    """
     logs_dir = _local_logs_dir(project_cfg)
     if kind == "dumps":
         files = [p for p in logs_dir.iterdir()
@@ -714,8 +809,13 @@ def list_local_history(project_cfg, kind="logs"):
 
 
 def _pick_from_menu(title, options_with_dates, allow_cancel=True):
-    """options_with_dates: lista de (label, fecha_str). Devuelve el índice
-    elegido, o None si canceló."""
+    """!
+    @brief Print a numbered menu and prompt for a choice.
+    @param title Menu title to print.
+    @param options_with_dates list of `(label, date_str)` tuples.
+    @param allow_cancel Whether option `0` cancels the menu.
+    @return The chosen index (`0`-based), or `None` if cancelled/invalid.
+    """
     print(f"\n{C.BOLD}{title}{C.RESET}")
     for i, (label, date_str) in enumerate(options_with_dates, 1):
         print(f"  {i:2d}. {label:<40} {C.DIM}{date_str}{C.RESET}")
@@ -737,8 +837,14 @@ def _pick_from_menu(title, options_with_dates, allow_cancel=True):
 
 
 def download_logs_and_dumps(project_cfg, global_cfg):
-    """Menú: descargar el ÚLTIMO log/dump, elegir uno ESPECÍFICO de lo que
-    hay ahora en la consola, o abrir uno del HISTORIAL local ya descargado."""
+    """!
+    @brief Menu: download the LATEST log/dump, pick a SPECIFIC one from what's currently on
+           the console, or browse the local HISTORY of previously downloaded files.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict (VPN bypass, etc).
+    @note The local-history mode (option 4) is a deliberate third mode, not just a
+          convenience shortcut -- see docs/dev-notes/ftp_ops.md.
+    """
     print(f"{C.BOLD}{t('ftp_ops.what_to_do')}{C.RESET}")
     print(f"  {t('ftp_ops.menu_download_latest')}")
     print(f"  {t('ftp_ops.menu_pick_log')}")
@@ -793,6 +899,13 @@ def download_logs_and_dumps(project_cfg, global_cfg):
 
 
 def _download_latest(ftp, project_cfg, want_dump=True, want_log=True):
+    """!
+    @brief Download the most recent crash dump and/or log from the console.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param project_cfg Active project config dict.
+    @param want_dump Whether to download the latest crash dump.
+    @param want_log Whether to download the latest log.
+    """
     if want_dump:
         dumps = list_remote_dumps(ftp, project_cfg)
         if dumps:
@@ -818,12 +931,21 @@ def _download_latest(ftp, project_cfg, want_dump=True, want_log=True):
 
 
 def _offer_analyze(project_cfg, dump_path):
+    """!
+    @brief Offer to run the built-in crash analyzer on a just-downloaded dump.
+    @param project_cfg Active project config dict.
+    @param dump_path Local path to the downloaded crash dump.
+    """
     if tui.confirm(t("ftp_ops.confirm_analyze_dump")):
         from . import crash_analyzer
         crash_analyzer.analyze(project_cfg, str(dump_path))
 
 
 def _browse_local_history(project_cfg):
+    """!
+    @brief Interactive browser over local log/dump history; opens or analyzes the pick.
+    @param project_cfg Active project config dict.
+    """
     print(f"\n{C.BOLD}{t('ftp_ops.previously_downloaded_title')}{C.RESET}")
     logs = list_local_history(project_cfg, "logs")
     dumps = list_local_history(project_cfg, "dumps")
@@ -853,10 +975,15 @@ def _browse_local_history(project_cfg):
 
 
 # ---------------------------------------------------------------------------
-# Shaders (GLSL volcado <-> CG traducido)
+# Shaders (dumped GLSL <-> translated CG)
 # ---------------------------------------------------------------------------
 
 def download_glsl_shaders(project_cfg, global_cfg):
+    """!
+    @brief Download all dumped `.glsl` shaders from the Vita to `<project_dir>/glsl_dump/`.
+    @param project_cfg Active project config dict (`vita_glsl_dir`).
+    @param global_cfg Global config dict (VPN bypass, etc).
+    """
     ftp = _connect(project_cfg, global_cfg)
     if not ftp:
         return
@@ -883,6 +1010,11 @@ def download_glsl_shaders(project_cfg, global_cfg):
 
 
 def upload_cg_shaders(project_cfg, global_cfg):
+    """!
+    @brief Upload all local translated `.cg` shaders to the Vita.
+    @param project_cfg Active project config dict (`vita_cg_dir`).
+    @param global_cfg Global config dict (VPN bypass, etc).
+    """
     local_dir = Path(project_cfg["_project_dir"]) / "assets" / "cg"
     if not local_dir.is_dir():
         print(f"{C.RED}{t('ftp_ops.dir_not_found', path=local_dir)}{C.RESET}")
@@ -911,6 +1043,12 @@ def upload_cg_shaders(project_cfg, global_cfg):
 
 
 def sync_shaders(project_cfg, global_cfg):
+    """!
+    @brief Two-step shader sync: download undtranslated GLSL dumps and report which still
+           lack a `.cg` translation, then upload whatever `.cg` files exist locally.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict (VPN bypass, etc).
+    """
     print(t("ftp_ops.sync_step1"))
     download_glsl_shaders(project_cfg, global_cfg)
 
@@ -931,12 +1069,19 @@ def sync_shaders(project_cfg, global_cfg):
 
 
 # ---------------------------------------------------------------------------
-# Chequeos de salud
+# Health checks
 # ---------------------------------------------------------------------------
 
 def check_libshacccg(project_cfg, global_cfg):
-    """libshacccg.suprx corrupto/faltante produce 'fatal internal error' en
-    CUALQUIER shader, incluso uno trivial -- vale la pena chequearlo aparte."""
+    """!
+    @brief Check that `libshacccg.suprx` exists (and isn't suspiciously small) at its known
+           candidate paths.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict (VPN bypass, etc).
+    @note A corrupt or missing `libshacccg.suprx` produces a "fatal internal error" on ANY
+          shader, even a trivial one -- worth checking in isolation. See
+          docs/dev-notes/ftp_ops.md.
+    """
     ftp = _connect(project_cfg, global_cfg)
     if not ftp:
         return
@@ -955,10 +1100,17 @@ def check_libshacccg(project_cfg, global_cfg):
 
 
 def verify_data_assets(project_cfg, global_cfg, local_reference_dir):
-    """Compara cantidad de entradas de primer nivel (chequeo superficial, no
-    recursivo -- una carpeta como 3d/ con miles de subcarpetas agota las
-    conexiones de datos del ftpd de VitaShell si se recorre entera) entre el
-    volcado local de referencia y ux0:data/<slug>/ en la consola."""
+    """!
+    @brief Compare first-level entry counts, per subfolder, between a local reference asset
+           dump and `ux0:data/<slug>/` on the console.
+    @param project_cfg Active project config dict (`vita_game_data_dir`, `slug`).
+    @param global_cfg Global config dict (VPN bypass, etc).
+    @param local_reference_dir Local directory (relative to the project dir) to compare
+           against, e.g. an extracted APK assets folder.
+    @note Shallow by design, not recursive: a full recursive listing on a folder with
+          thousands of entries exhausts VitaShell's ftpd data connections. See
+          docs/dev-notes/ftp_ops.md.
+    """
     local_dir = Path(project_cfg["_project_dir"]) / local_reference_dir
     if not local_dir.is_dir():
         print(f"{C.RED}{t('ftp_ops.local_reference_not_found', path=local_dir)}{C.RESET}")

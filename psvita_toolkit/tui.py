@@ -1,15 +1,19 @@
-"""
-Framework de TUI reutilizable: menú de flechas ANSI (sin curses ni
-dependencias externas), consistente en todo el toolkit.
+"""!
+@file tui.py
+@brief Reusable TUI framework: ANSI arrow-key menu (no curses or external
+       dependencies), consistent across the whole toolkit.
 
-Navegación global disponible en CUALQUIER menú, en cualquier nivel de
-profundidad:
-  - flechas ↑/↓        moverse
-  - Enter              elegir
-  - 1-9                saltar directo a esa opción
-  - 0 / q              volver un nivel (regresa al menú que llamó a este)
-  - m                  ir directo al menú PRINCIPAL desde donde sea
-  - Ctrl+C             igual que 'm' (nunca mata el proceso de golpe)
+@details
+Global navigation available in ANY menu, at any level of depth:
+  - ↑/↓ arrows   move the selection
+  - Enter        choose the selected item
+  - 1-9          jump directly to that numbered option
+  - 0 / Q        go back one level (returns to the menu that called this one)
+  - M            jump directly to the MAIN menu from anywhere
+  - Ctrl+C       same as 'M' while navigating (never kills the process abruptly)
+
+See `docs/dev-notes/tui.md` for the rationale behind avoiding `curses`, the
+`termios`-based `getch()`, and the exception-based navigation model.
 """
 
 import glob
@@ -76,17 +80,23 @@ class C:
 
 
 class GoToMainMenu(Exception):
-    """Se lanza desde un callback de menú para volver directo a la raíz,
-    sin importar cuántos submenús haya en el medio."""
+    """!
+    @brief Raise from a menu callback to return straight to the root menu,
+           regardless of how many submenus are in between.
+    """
 
 
 class ExitApp(Exception):
-    """Se lanza para cerrar el programa de forma prolija."""
+    """!
+    @brief Raise to shut down the program cleanly.
+    """
 
 
 class SwitchProject(Exception):
-    """Se lanza para volver al selector de proyectos (elegir otro port /
-    crear uno nuevo) sin cerrar el programa."""
+    """!
+    @brief Raise to return to the project selector (pick another port /
+           create a new one) without closing the program.
+    """
 
 
 def clear():
@@ -98,9 +108,13 @@ def term_width(default=80):
 
 
 def getch():
-    """Lee un solo carácter (o secuencia de escape de flecha) sin esperar
-    Enter. Solo macOS/Linux (termios) -- el toolkit está pensado para el
-    flujo de desarrollo en macOS descrito en los scripts originales."""
+    """!
+    @brief Read a single character (or an arrow-key escape sequence) without
+           waiting for Enter.
+    @return The character read, or the 3-character escape sequence for an
+            arrow key (e.g. `"\\x1b[A"` for the up arrow).
+    @note macOS/Linux only -- relies on `termios`/`tty` raw mode.
+    """
     import termios
     import tty
     fd = sys.stdin.fileno()
@@ -155,16 +169,22 @@ def _footer_hint():
 
 
 def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_extra=None):
-    """
-    items: lista de tuplas (label:str, callback:callable|None).
-      - callback() se ejecuta al elegir esa opción. Puede devolver lo que
-        quiera (se ignora); para volver al menú principal desde el
-        callback, lanzar GoToMainMenu(); para salir del programa, ExitApp().
-      - callback == None marca una opción "volver" explícita en la lista
-        (equivalente a apretar 0/Q en ese momento).
-    Devuelve normalmente cuando el usuario vuelve un nivel (0/Q, o eligió
-    un item con callback None). Deja propagar GoToMainMenu/ExitApp hacia
-    arriba para que el loop principal decida qué hacer.
+    """!
+    @brief Render and drive an arrow-key menu until the user backs out of it.
+    @param title Banner title.
+    @param items List of `(label: str, callback: callable | None)` tuples.
+           `callback()` runs when that item is chosen; its return value is
+           ignored. Raise `GoToMainMenu()` from a callback to return to the
+           main menu, or `ExitApp()` to quit. `callback is None` marks an
+           explicit "back" item (same as pressing 0/Q on it).
+    @param breadcrumb Optional breadcrumb line shown under the banner.
+    @param subtitle Optional subtitle shown under the banner title.
+    @param icon Emoji shown in the banner.
+    @param header_extra Optional zero-arg callable invoked (and printed)
+           right after the banner, before the item list.
+    @return Normally, when the user backs out (0/Q, or chose a `None`-callback
+            item). Lets `GoToMainMenu`/`ExitApp`/`SwitchProject` propagate up
+            so the caller's loop decides what to do next.
     """
     idx = 0
     n = len(items)
@@ -205,7 +225,7 @@ def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_ext
                 raise
             except KeyboardInterrupt:
                 print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
-            except Exception as e:  # noqa: BLE001 -- el menú nunca debe morir por un error de una acción
+            except Exception as e:  # noqa: BLE001 -- the menu must never die from an action's error
                 print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
             pause()
         elif c in ("0", "q", "Q"):
@@ -221,7 +241,7 @@ def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_ext
 
 
 # ---------------------------------------------------------------------------
-# Entrada de rutas con autocompletado (drag & drop desde Finder, ~ y comillas)
+# Path input with autocompletion (Finder drag & drop, ~ and quotes)
 # ---------------------------------------------------------------------------
 
 def setup_path_completer():
@@ -240,8 +260,12 @@ def setup_path_completer():
 
 
 def clean_path_input(raw):
-    """Limpia comillas y espacios escapados típicos de arrastrar un archivo
-    desde el Finder a la Terminal."""
+    """!
+    @brief Clean up quotes and escaped spaces typical of dragging a file
+           from the Finder into the Terminal.
+    @param raw Raw path string as typed/pasted by the user.
+    @return Cleaned, `~`-expanded path string.
+    """
     p = raw.strip()
     if len(p) >= 2 and ((p[0] == p[-1] == '"') or (p[0] == p[-1] == "'")):
         p = p[1:-1]

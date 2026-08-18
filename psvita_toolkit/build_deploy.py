@@ -1,15 +1,18 @@
-"""
-Asistente de compilación y despliegue -- generaliza build_and_install.sh
-(versión Advena, la más completa: destino -> preset -> despliegue).
+"""!
+@file build_deploy.py
+@brief Build and deploy wizard: target selection, build presets, running the
+       project's `build.sh`, locating the resulting `.vpk`, and deploying to
+       Vita3K or a physical PS Vita.
 
-Los presets NO están hardcodeados por juego: los 4 universales (Debug,
-Release, RelWithDebInfo, MinSizeRel) siempre están, y además se auto-
-descubren banderas extra grepeando las condiciones `"$1" = "--xxx"` del
-`build.sh` del proyecto activo (mismo truco que ya usaban los
-build_and_install.sh de Zenonia4/Dungeon Hunter 2) -- así ningún flag
-específico de un motor (NEON, dirty-rect, downsample, etc.) queda
-hardcodeado en la herramienta genérica; simplemente aparece si el build.sh
-de ESE port lo define.
+@details
+Build presets are not hardcoded per game: the 4 universal ones (Debug,
+Release, RelWithDebInfo, MinSizeRel) are always offered, and additional
+project-specific flags are auto-discovered by scanning the active project's
+`build.sh` for `"$1" = "--xxx"` conditions.
+
+See `docs/dev-notes/build_deploy.md` for the rationale behind this
+auto-discovery design (vs. hardcoding engine-specific flags) and the
+import-time i18n-key freezing in `UNIVERSAL_PRESETS`.
 """
 
 import os
@@ -24,12 +27,10 @@ from . import tui
 from .i18n import t
 from .tui import C
 
-# Los descriptores de UNIVERSAL_PRESETS se guardan como CLAVES (no texto ya
-# resuelto) porque esta lista se construye a nivel de módulo, en import time
-# -- ANTES de que main.py llame a cfgmod.ensure_global_config() y fije el
-# idioma activo. Si acá se llamara a t() directamente, quedaría congelado en
-# el idioma por defecto para siempre. Se resuelven con t() recién en
-# _choose_preset(), cuando ya se sabe el idioma.
+# UNIVERSAL_PRESETS' descriptors are stored as i18n KEYS (not resolved text)
+# because this list is built at module scope, at import time, before the
+# active language is set. See docs/dev-notes/build_deploy.md for why. They
+# are resolved with t() in _choose_preset(), once the language is known.
 UNIVERSAL_PRESETS = [
     ("Debug", "debug", "build_deploy.preset_debug_desc"),
     ("Release", "release", "build_deploy.preset_release_desc"),
@@ -258,8 +259,14 @@ i18n.register(STRINGS)
 
 
 def _discover_extra_flags(build_sh_path):
-    """Grepea las condiciones '"$1" = "--xxx"' de build.sh del proyecto,
-    en el orden en que aparecen -- sin asumir NADA sobre qué flags son."""
+    """!
+    @brief Scan a project's `build.sh` for custom `"$1" = "--xxx"` flag conditions.
+    @details Returns the flags in the order they appear in the file, making no
+             assumptions about which flags exist.
+    @param build_sh_path Path to the project's `build.sh`.
+    @return List of flag strings (e.g. `["--downsample-test"]`), in file order;
+            `[]` if `build_sh_path` doesn't exist.
+    """
     if not build_sh_path.exists():
         return []
     text = build_sh_path.read_text(errors="ignore")
@@ -271,11 +278,17 @@ def _discover_extra_flags(build_sh_path):
 
 
 def _flag_comment(build_sh_path, flag):
-    """Busca el comentario pegado a donde se define el flag en build.sh
-    (la línea anterior al 'if/elif', o la primera línea del bloque si el
-    comentario está adentro -- patrón típico: 'elif [ "$1" = "--x" ]; then'
-    seguido de un comentario describiendo la variante) para mostrarlo como
-    descripción corta en el menú."""
+    """!
+    @brief Find the comment describing a given `build.sh` flag, for display
+           as a short description in the preset menu.
+    @details Looks for a `#`-comment on the line immediately before or after
+             the line that defines the flag (typical pattern: an
+             `elif [ "$1" = "--x" ]; then` line with a comment above or below
+             it describing the variant).
+    @param build_sh_path Path to the project's `build.sh`.
+    @param flag Flag string to look up (e.g. `"--downsample-test"`).
+    @return The comment text with the leading `#` stripped, or `""` if none found.
+    """
     if not build_sh_path.exists():
         return ""
     lines = build_sh_path.read_text(errors="ignore").splitlines()
@@ -290,6 +303,10 @@ def _flag_comment(build_sh_path, flag):
 
 
 def _choose_target():
+    """!
+    @brief Prompt the user to pick the execution target.
+    @return `"vita3k"`, `"psvita"`, `"local"`, or `None` if cancelled/invalid input.
+    """
     print(f"{C.BOLD}{t('build_deploy.choose_target_title')}{C.RESET}")
     print(f"  {C.GREEN}1){C.RESET} {t('build_deploy.target_vita3k')}")
     print(f"  {C.GREEN}2){C.RESET} {t('build_deploy.target_psvita')}")
@@ -300,11 +317,18 @@ def _choose_target():
 
 
 def _choose_preset(build_sh_path):
+    """!
+    @brief Prompt the user to pick a build preset: the 4 universal presets,
+           any extra flags auto-discovered from the project's `build.sh`, or
+           a custom manual CMake flags entry.
+    @param build_sh_path Path to the project's `build.sh`, used to discover extra flags.
+    @return Tuple `(preset_value, extra_cmake_flags)`, or `(None, None)` if cancelled.
+    """
     extra_flags = _discover_extra_flags(build_sh_path)
 
     print(f"\n{C.BOLD}{t('build_deploy.choose_preset_title')}{C.RESET}")
-    # Resolver los descriptores de UNIVERSAL_PRESETS recién acá (ver comentario
-    # junto a esa lista) -- para este punto el idioma activo ya está fijado.
+    # Resolve UNIVERSAL_PRESETS' i18n keys now, since the active language is
+    # already set by this point (see the note next to UNIVERSAL_PRESETS above).
     options = [(label, value, t(desc_key)) for label, value, desc_key in UNIVERSAL_PRESETS]
     for flag in extra_flags:
         desc = _flag_comment(build_sh_path, flag) or t("build_deploy.flag_no_desc")
@@ -336,6 +360,14 @@ def _choose_preset(build_sh_path):
 
 
 def _run_build(project_dir, preset, extra_args):
+    """!
+    @brief Run the project's `build.sh` with the chosen preset and extra args.
+    @param project_dir Path to the project directory.
+    @param preset Preset value to pass as the first argument to `build.sh`
+                  (omitted if `"custom"` or falsy).
+    @param extra_args Extra list of arguments to append after the preset.
+    @return `True` if `build.sh` exited with code 0.
+    """
     build_sh = project_dir / "build.sh"
     if not build_sh.exists() or not os.access(build_sh, os.X_OK):
         print(f"{C.RED}{t('build_deploy.build_sh_not_found', build_sh=build_sh)}{C.RESET}")
@@ -350,13 +382,26 @@ def _run_build(project_dir, preset, extra_args):
 
 
 def _find_output_vpk(project_dir, build_dir, project_name, preset):
+    """!
+    @brief Locate the most likely `.vpk` produced by a build.
+    @details Picks the most recently modified `.vpk` in `build_dir` whose
+             filename matches `preset`, falling back to the most recently
+             modified `.vpk` overall if none matches or `preset` is falsy.
+    @param project_dir Path to the project directory.
+    @param build_dir Build output directory, relative to `project_dir`.
+    @param project_name Project/VPK name (unused by the current matching logic).
+    @param preset Preset value to match against candidate filenames.
+    @return `Path` to the selected `.vpk`, or `None` if `build_dir` doesn't
+            exist or contains no `.vpk` files.
+    """
     build_path = project_dir / build_dir
     if not build_path.is_dir():
         return None
     candidates = sorted(build_path.glob("*.vpk"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not candidates:
         return None
-    # Preferir el que matchea el preset/nombre de proyecto si hay varios recién tocados
+    # Prefer the candidate whose filename matches the preset/project name,
+    # in case several .vpk files were touched recently.
     for p in candidates:
         if preset and preset.replace("-", "_").replace("--", "") in p.stem:
             return p
@@ -364,6 +409,15 @@ def _find_output_vpk(project_dir, build_dir, project_name, preset):
 
 
 def _deploy_vita3k(project_cfg, global_cfg, vpk_path):
+    """!
+    @brief Interactive menu to deploy a build to the Vita3K emulator.
+    @details Offers: hot-swap `eboot.bin` + relaunch Vita3K, install the full
+             `.vpk` and launch, copy only `eboot.bin` without launching, or skip.
+    @param project_cfg Per-project config dict (must include `_project_dir`,
+                        `titleid`, `game_name`, and optionally `build_dir`).
+    @param global_cfg Global config dict (Vita3K app path, filesystem dir, logs dir).
+    @param vpk_path Path to the built `.vpk`, or `None` if not found.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     titleid = project_cfg["titleid"]
     build_dir = project_dir / project_cfg.get("build_dir", "build")
@@ -424,6 +478,14 @@ def _deploy_vita3k(project_cfg, global_cfg, vpk_path):
 
 
 def _deploy_psvita(project_cfg, global_cfg, vpk_path):
+    """!
+    @brief Interactive menu to deploy a build to a physical PS Vita over FTP.
+    @details Offers: upload only `eboot.bin`, upload the full `.vpk` to
+             `ux0:downloads/`, or skip. Actual transfer is delegated to `ftp_ops`.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict (Vita IP/port, consumed by `ftp_ops`).
+    @param vpk_path Path to the built `.vpk`, or `None` if not found.
+    """
     from . import ftp_ops
     print(f"\n{C.BOLD}{t('build_deploy.deploy_psvita_title')}{C.RESET}")
     print(f"  {C.GREEN}1){C.RESET} {t('build_deploy.deploy_psvita_opt1')}")
@@ -439,6 +501,12 @@ def _deploy_psvita(project_cfg, global_cfg, vpk_path):
 
 
 def build_and_deploy_wizard(project_cfg, global_cfg):
+    """!
+    @brief Full interactive build+deploy flow: choose target, choose preset,
+           run the build, locate the output `.vpk`, then deploy it.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     build_sh_path = project_dir / "build.sh"
 
@@ -477,8 +545,13 @@ def build_and_deploy_wizard(project_cfg, global_cfg):
 
 
 def deploy_only_vita3k(project_cfg, global_cfg):
-    """Re-despliega el último build ya compilado, sin recompilar (equivalente
-    a elegir 'Solo copiar/relanzar' cuando ya tenés un eboot.bin fresco)."""
+    """!
+    @brief Redeploy the last already-built output to Vita3K, without rebuilding.
+    @details Equivalent to running the wizard and picking "copy/relaunch" when
+             a fresh `eboot.bin` already exists from a previous build.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     vpk_path = _find_output_vpk(project_dir, project_cfg.get("build_dir", "build"),
                                  project_cfg["project_name"], None)

@@ -1,11 +1,19 @@
-"""
-Analizador de crash dumps (.psp2dmp / psp2core-*) -- integrado desde
-parse_dump.py, generalizado: el nombre del ejecutable principal y las rutas
-de VITASDK/vita-parse-core salen de la config del proyecto/global en vez de
-estar hardcodeadas a un juego y a un usuario.
+"""!
+@file crash_analyzer.py
+@brief Crash dump (`.psp2dmp` / `psp2core-*`) analyzer for PS Vita ports.
 
-Requiere `vita-parse-core` clonado (ver global_cfg['vita_parse_core_dir']) y
-las herramientas de VITASDK (arm-vita-eabi-objdump/c++filt) en el PATH.
+@details
+Wraps `vita-parse-core` (see `global_cfg['vita_parse_core_dir']`) to parse a Vita
+core dump against the port's ELF and original Android `.so`, producing a
+human-readable report: crashed-thread info, CPU registers, disassembly around
+the crash PC, stack backtrace, reconstructed call chain, and loaded modules.
+
+Requires `vita-parse-core` cloned locally and VITASDK's ARM toolchain
+(`arm-vita-eabi-objdump`, `arm-vita-eabi-c++filt`) on `PATH`.
+
+See `docs/dev-notes/crash_analyzer.md` for why this wraps `vita-parse-core`
+instead of reimplementing dump parsing, and the rationale behind the `.so`
+memory-base auto-detection strategy.
 """
 
 import glob
@@ -237,6 +245,14 @@ STOP_REASONS = defaultdict(str, {
 
 
 def _ensure_toolchain(global_cfg):
+    """!
+    @brief Wire up `PATH`/`sys.path` for the VITASDK toolchain and
+           `vita-parse-core`, then verify its parser modules import.
+    @param global_cfg Global config dict; reads `vitasdk` and
+           `vita_parse_core_dir`.
+    @return `True` if `vita-parse-core`'s `core`/`elf`/`util` modules imported
+            successfully, `None` otherwise (after printing an error).
+    """
     vitasdk_bin = os.path.join(global_cfg.get("vitasdk", ""), "bin")
     if os.path.isdir(vitasdk_bin) and vitasdk_bin not in os.environ.get("PATH", ""):
         os.environ["PATH"] = f"{vitasdk_bin}:{os.environ.get('PATH', '')}"
@@ -257,6 +273,12 @@ def _ensure_toolchain(global_cfg):
 
 
 def _demangle(name):
+    """!
+    @brief Demangle a C++ symbol name (e.g. `_Z...`) via `c++filt`.
+    @param name Raw (possibly mangled) symbol name.
+    @return Demangled name, or `name` unchanged if it isn't mangled or no
+            `c++filt` binary is available.
+    """
     if not name or not name.startswith("_Z"):
         return name
     for cmd in ("arm-vita-eabi-c++filt", "c++filt"):
@@ -270,12 +292,28 @@ def _demangle(name):
 
 
 class SymbolTable:
+    """!
+    @brief Dynamic symbol table for an Android `.so`, built from
+           `arm-vita-eabi-objdump -T` output, used to resolve crash addresses
+           back to function names.
+    """
+
     def __init__(self, so_path):
+        """!
+        @brief Build the symbol table for `so_path` (calls `_load()` immediately).
+        @param so_path Path to the `.so` file to extract symbols from.
+        """
         self.so_path = so_path
         self.symbols = []
         self._load()
 
     def _load(self):
+        """!
+        @brief Parse `objdump -T` output into `(start, end, demangled, raw)`
+               tuples, keeping only function symbols (flag `F`).
+        @details Populates and sorts `self.symbols` by start address. Leaves
+                 `self.symbols` empty if the `.so` doesn't exist or objdump fails.
+        """
         if not self.so_path or not os.path.exists(self.so_path):
             return
         try:
@@ -296,6 +334,17 @@ class SymbolTable:
             print(f"{C.YELLOW}{t('crash_analyzer.symbols_extract_failed', path=self.so_path, error=e)}{C.RESET}")
 
     def lookup(self, offset):
+        """!
+        @brief Resolve a `.so`-relative offset to `symbol_name + 0xoffset`.
+        @details First tries an exact match against each symbol's `[start,
+                 end)` range (with a small +4 byte tolerance past `end`, since
+                 reported symbol sizes can be off by one instruction). If no
+                 symbol contains the offset, falls back to the nearest
+                 preceding symbol by address.
+        @param offset Offset relative to the `.so`'s load base.
+        @return `"symbol + 0xN"` string, or `"0xN"` (the raw offset) if the
+                symbol table is empty.
+        """
         for start, end, demangled, _ in self.symbols:
             if start <= offset < end or (start <= offset <= end + 4 and end > start):
                 return f"{demangled} + 0x{offset - start:x}"
@@ -309,6 +358,23 @@ class SymbolTable:
 
 
 def _auto_detect_so_base(dump_addrs, so_syms):
+    """!
+    @brief Guess the `.so`'s runtime load base by voting across candidate
+           addresses found on the stack/registers against known symbol offsets.
+    @details For every raw address in `dump_addrs` that falls in the
+             `0x80000000`-`0x9fffffff` window (the Vita's typical user `.so`
+             mapping range), and for every known symbol `(sym_start, sym_end)`
+             in `so_syms`, computes a candidate base as `(addr - sym_start)`
+             rounded down to a 4 KiB page boundary, then keeps it only if the
+             address falls within that symbol's `[0, size]` span relative to
+             the candidate base. Each valid `(address, symbol)` pair casts one
+             vote for its candidate base; the most-voted candidate wins.
+    @param dump_addrs Iterable of raw addresses collected from the crashed
+           thread(s) (PC, LR, stack words).
+    @param so_syms `SymbolTable` for the `.so`.
+    @return The most likely load base address, or `None` if no candidate
+            received any votes (or `so_syms` has no symbols).
+    """
     if not so_syms or not so_syms.symbols:
         return None
     candidates = Counter()
@@ -327,6 +393,18 @@ def _auto_detect_so_base(dump_addrs, so_syms):
 
 
 def _disassemble_around(bin_path, offset, is_thumb=True):
+    """!
+    @brief Disassemble a window of instructions around `offset` in `bin_path`,
+           marking the exact crashing instruction.
+    @param bin_path Path to the ELF or `.so` binary to disassemble.
+    @param offset Byte offset within `bin_path` to center the window on.
+    @param is_thumb If `True`, clears the Thumb bit from `offset` and forces
+           Thumb-mode disassembly (`-Mforce-thumb`); PS Vita ARM code is
+           overwhelmingly Thumb-2.
+    @return List of formatted disassembly lines, with the crashing instruction
+            prefixed by `==>` and a translated marker; a single error-message
+            line if disassembly failed.
+    """
     if not bin_path or not os.path.exists(bin_path):
         return []
     addr = offset & ~1 if is_thumb else offset
@@ -350,6 +428,15 @@ def _disassemble_around(bin_path, offset, is_thumb=True):
 
 
 def _auto_find_files(project_dir, build_dir):
+    """!
+    @brief Best-effort discovery of the port's ELF and Android `.so` binaries.
+    @details Looks for a single `*.elf` under the build dir (or project root),
+             and recursively for `*.so` files under the project, preferring
+             any whose name contains `libgame` or `libmain`.
+    @param project_dir Path to the port's project directory.
+    @param build_dir Local build output directory, relative to `project_dir`.
+    @return `(elf_file, so_file)` tuple; either element is `None` if nothing matched.
+    """
     elf_candidates = glob.glob(os.path.join(project_dir, build_dir, "*.elf")) + glob.glob(os.path.join(project_dir, "*.elf"))
     elf_file = elf_candidates[0] if elf_candidates else None
 
@@ -360,6 +447,25 @@ def _auto_find_files(project_dir, build_dir):
 
 
 def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None, so_base=None, stack_depth=36):
+    """!
+    @brief Parse a crash dump and print/write a full human-readable analysis report.
+    @details Resolves the crashed thread(s), CPU registers, the `.so` memory
+             base (auto-detected via `_auto_detect_so_base()` if not given),
+             disassembly around the crash PC, a stack backtrace, and the list
+             of loaded modules. Saves the same report as text to
+             `<dump_path>.analysis.txt`.
+    @param project_cfg Per-project config dict (needs `_project_dir`; reads
+           `project_name`, `build_dir`).
+    @param dump_path Path to the `.psp2dmp`/`psp2core-*` file to analyze.
+    @param global_cfg Global config dict; loaded from disk if omitted.
+    @param elf_path Path to the port's Vita `.elf`; auto-detected if omitted.
+    @param so_path Path to the original Android `.so`; auto-detected if omitted.
+    @param so_base Known `.so` load base; auto-detected if omitted.
+    @param stack_depth Number of stack words (above/below SP) to scan for
+           backtrace candidates and address collection.
+    @return None. Prints the report to stdout and writes it to
+            `<dump_path>.analysis.txt`.
+    """
     from . import config as cfgmod
     if global_cfg is None:
         global_cfg = cfgmod.load_global_config()
@@ -520,6 +626,11 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
 
 
 def analyze_menu(project_cfg, global_cfg):
+    """!
+    @brief Interactive menu: pick a locally downloaded crash dump and analyze it.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict.
+    """
     from . import ftp_ops
     dumps = ftp_ops.list_local_history(project_cfg, "dumps")
     if not dumps:

@@ -1,14 +1,18 @@
-"""
-Configuración persistente del toolkit.
+"""!
+@file config.py
+@brief Persistent configuration for the toolkit: global settings and per-project settings.
 
-Dos niveles:
-  - Config GLOBAL (~/.psvita-toolkit/config.json): rutas que no dependen del
-    port activo (BASE_DIR donde viven todos los ports, soloader-boilerplate,
-    skills de Claude, VITASDK, Vita3K.app). Se pregunta una sola vez.
-  - Config POR PROYECTO (<port_dir>/.psvita-toolkit.json): datos propios de
-    cada port (nombre, slug, TITLEID, IP de la Vita de pruebas, etc). Se crea
-    al inicializar un port nuevo, o se "adopta" (auto-detectada) la primera
-    vez que se abre un port viejo que todavía no tiene este archivo.
+@details
+Two tiers:
+  - Global config (`~/.psvita-toolkit/config.json`): paths that don't depend on the active
+    port (`BASE_DIR`, `soloader-boilerplate`, Claude Code skills, `VITASDK`, `Vita3K.app`).
+    Asked once.
+  - Per-project config (`<port_dir>/.psvita-toolkit.json`): per-port data (name, slug,
+    TITLEID, test Vita IP, etc). Created when initializing a new port, or auto-detected
+    ("adopted") the first time an existing port without this file is opened.
+
+See `docs/dev-notes/config.md` for the rationale behind the two-tier split, the language
+bootstrap ordering, and the `soloader-boilerplate` exclusion in project discovery.
 """
 
 import json
@@ -86,6 +90,12 @@ i18n.register(STRINGS)
 
 
 def _expand(p):
+    """!
+    @brief Normalize a user-typed path: strip surrounding quotes, unescape
+           backslash-escaped spaces, expand `~` and environment variables.
+    @param p Raw path string as typed/pasted by the user.
+    @return Normalized absolute-or-relative path string, or `p` unchanged if falsy.
+    """
     if not p:
         return p
     p = p.strip()
@@ -96,10 +106,14 @@ def _expand(p):
 
 
 # ---------------------------------------------------------------------------
-# Config global
+# Global config
 # ---------------------------------------------------------------------------
 
 def load_global_config():
+    """!
+    @brief Load the global config JSON, if it exists.
+    @return dict with the saved config, or `{}` if missing/unreadable.
+    """
     if not GLOBAL_CONFIG_PATH.exists():
         return {}
     try:
@@ -110,6 +124,10 @@ def load_global_config():
 
 
 def save_global_config(cfg):
+    """!
+    @brief Persist the global config dict to `~/.psvita-toolkit/config.json`.
+    @param cfg Config dict to write (creates the parent directory if needed).
+    """
     GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(GLOBAL_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -135,9 +153,12 @@ OPTIONAL_GLOBAL_KEYS = {
 
 
 def prompt_language():
-    """Selector de idioma tri-lingüe -- se muestra ANTES de que el idioma
-    esté decidido, así que va hardcodeado en los 3 idiomas a la vez (no puede
-    salir de t(), todavía no hay idioma activo)."""
+    """!
+    @brief Tri-lingual language picker shown before a language is active.
+    @note Must not call `t()` -- there is no active language yet, so the prompt
+          text is hardcoded in all 3 supported languages simultaneously.
+    @return Language code chosen by the user (one of `i18n.SUPPORTED_LANGUAGES`).
+    """
     print(f"\n{t('config.language_prompt')}")
     for i, code in enumerate(i18n.SUPPORTED_LANGUAGES, 1):
         print(f"  {i}. {i18n.LANGUAGE_NAMES[code]}")
@@ -148,9 +169,13 @@ def prompt_language():
 
 
 def ensure_language(cfg=None):
-    """Carga el idioma guardado (y lo activa) o, si es la primera vez,
-    lo pregunta y lo guarda. Se llama ANTES que ensure_global_config para que
-    todo lo que se pregunte después ya salga en el idioma elegido."""
+    """!
+    @brief Load and activate the saved UI language, or prompt for one on first run.
+    @note Must run before `ensure_global_config()` so every subsequent prompt is
+          already shown in the chosen language.
+    @param cfg Optional pre-loaded global config dict; loaded from disk if omitted.
+    @return The (possibly updated) global config dict, with `cfg["language"]` set.
+    """
     if cfg is None:
         cfg = load_global_config()
     lang = cfg.get("language")
@@ -166,8 +191,12 @@ def ensure_language(cfg=None):
 
 
 def ensure_global_config(tui):
-    """Carga la config global; si faltan claves requeridas, las pregunta
-    interactivamente (una sola vez, quedan guardadas para la próxima)."""
+    """!
+    @brief Load the global config, prompting interactively for any required
+           key still missing (asked once, then persisted).
+    @param tui The `tui` module (passed in, not imported, to avoid a circular import).
+    @return The complete global config dict.
+    """
     cfg = ensure_language(load_global_config())
     changed = False
 
@@ -215,6 +244,10 @@ def ensure_global_config(tui):
 
 
 def update_global_config(**kwargs):
+    """!
+    @brief Merge `kwargs` into the saved global config and persist it.
+    @return The updated global config dict.
+    """
     cfg = load_global_config()
     cfg.update(kwargs)
     save_global_config(cfg)
@@ -222,6 +255,10 @@ def update_global_config(**kwargs):
 
 
 def remember_project(project_dir):
+    """!
+    @brief Record `project_dir` as the most recently used project.
+    @param project_dir Path to the project directory to remember.
+    """
     cfg = load_global_config()
     recents = cfg.get("recent_projects", [])
     project_dir = str(project_dir)
@@ -233,18 +270,33 @@ def remember_project(project_dir):
 
 
 # ---------------------------------------------------------------------------
-# Config por proyecto
+# Per-project config
 # ---------------------------------------------------------------------------
 
 def project_config_path(project_dir):
+    """!
+    @brief Path to a project's `.psvita-toolkit.json`.
+    @param project_dir Path to the project directory.
+    @return `Path` to the project's config file (may not exist yet).
+    """
     return Path(project_dir) / PROJECT_CONFIG_FILENAME
 
 
 def has_project_config(project_dir):
+    """!
+    @brief Check whether `project_dir` already has a `.psvita-toolkit.json`.
+    @param project_dir Path to the project directory.
+    @return `True` if the project config file exists.
+    """
     return project_config_path(project_dir).exists()
 
 
 def load_project_config(project_dir):
+    """!
+    @brief Load a project's `.psvita-toolkit.json`, if present.
+    @param project_dir Path to the project directory.
+    @return dict with `_project_dir` injected, or `None` if missing/unreadable.
+    """
     p = project_config_path(project_dir)
     if not p.exists():
         return None
@@ -258,6 +310,11 @@ def load_project_config(project_dir):
 
 
 def save_project_config(project_dir, cfg):
+    """!
+    @brief Persist a project's config to `<project_dir>/.psvita-toolkit.json`.
+    @param project_dir Path to the project directory.
+    @param cfg Config dict to write (internal `_`-prefixed keys are stripped first).
+    """
     p = project_config_path(project_dir)
     cfg = {k: v for k, v in cfg.items() if not k.startswith("_")}
     with open(p, "w", encoding="utf-8") as f:
@@ -270,6 +327,18 @@ def new_project_config(
     vita_ip="192.168.1.100", vita_port=DEFAULT_VITA_PORT,
     apk_basename="", build_dir="build",
 ):
+    """!
+    @brief Build a fresh per-project config dict with the standard Vita path layout.
+    @param game_name Display name of the game.
+    @param slug Short internal slug (used to derive `ux0:` paths).
+    @param project_name CMake project / VPK name.
+    @param titleid 9-character PS Vita TITLEID.
+    @param vita_ip Test PS Vita's IP address.
+    @param vita_port FTP port of the test PS Vita (VitaShell default: 1337).
+    @param apk_basename Original `.apk` filename, if known.
+    @param build_dir Local build output directory, relative to the project root.
+    @return New per-project config dict, ready to pass to `save_project_config()`.
+    """
     return {
         "game_name": game_name,
         "slug": slug,
@@ -289,7 +358,7 @@ def new_project_config(
 
 
 # ---------------------------------------------------------------------------
-# Descubrimiento / adopción de proyectos
+# Project discovery / adoption
 # ---------------------------------------------------------------------------
 
 _TITLEID_RE = re.compile(r'VITA_TITLEID\s+"([A-Za-z0-9]{9})"')
@@ -300,8 +369,13 @@ _PORT_RE = re.compile(r'VITA_PORT\s*=\s*(\d+)')
 
 
 def looks_like_port(path):
-    """Heurística: ¿esta carpeta parece un port de PS Vita? (CMakeLists.txt
-    con VITA_TITLEID, o ya tiene porting_tools/, o ya tiene nuestra config)."""
+    """!
+    @brief Heuristic: does `path` look like a PS Vita port directory?
+    @details True if it already has our own config, or a `CMakeLists.txt`
+             containing `VITA_TITLEID`, or a legacy `porting_tools/` folder.
+    @param path Directory to check.
+    @return `True` if `path` looks like a port.
+    """
     path = Path(path)
     if project_config_path(path).exists():
         return True
@@ -321,12 +395,15 @@ _NON_PORT_DIR_NAMES = {"soloader-boilerplate"}
 
 
 def discover_projects(base_dir, exclude_dirs=()):
-    """Lista subcarpetas de base_dir que parecen ports (con o sin config
-    nuestra todavía) -- para el selector 'continuar con un port existente'.
-    Excluye el propio scaffold de soloader-boilerplate (su CMakeLists.txt
-    trae un VITA_TITLEID placeholder que si no lo hiciéramos matchearía la
-    misma heurística) y cualquier ruta extra que se le pase (ej. el propio
-    boilerplate_dir configurado, por si vive con otro nombre de carpeta)."""
+    """!
+    @brief List subfolders of `base_dir` that look like ports.
+    @details Excludes the `soloader-boilerplate` scaffold itself (see
+             `docs/dev-notes/config.md` for why) and any extra path passed in
+             `exclude_dirs`.
+    @param base_dir Root directory containing all ports.
+    @param exclude_dirs Extra absolute paths to exclude from the results.
+    @return list of dicts: `{"path", "name", "adopted", "game_name"}`.
+    """
     base = Path(base_dir)
     if not base.is_dir():
         return []
@@ -349,10 +426,14 @@ def discover_projects(base_dir, exclude_dirs=()):
 
 
 def autodetect_legacy_fields(project_dir):
-    """Para un port viejo (Zenonia2/3/4, DH2, Advena, o cualquiera creado
-    antes de este toolkit) sin .psvita-toolkit.json: extrae lo que se pueda
-    de CMakeLists.txt y de un porting_tools/manage_vita.py heredado, para
-    'adoptarlo' con el mínimo de preguntas manuales."""
+    """!
+    @brief Best-effort field extraction for adopting a pre-existing port.
+    @details Reads `CMakeLists.txt` and a legacy `porting_tools/manage_vita.py`
+             (if present) to guess TITLEID / game name / project name / Vita
+             IP and port, minimizing manual prompts when adopting an older port.
+    @param project_dir Path to the project directory being adopted.
+    @return dict of guessed fields (same shape as `new_project_config()`'s inputs).
+    """
     project_dir = Path(project_dir)
     guess = {
         "game_name": project_dir.name.replace("-vita", "").replace("-", " "),

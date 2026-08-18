@@ -1,10 +1,11 @@
-"""
-Sistema simple de internacionalización (i18n) del toolkit -- sin dependencias
-externas (no gettext/.po, un dict en memoria alcanza para el volumen de texto
-de esta herramienta).
+"""!
+@file i18n.py
+@brief Minimal in-memory internationalization (i18n) engine for the toolkit.
+@details No external dependencies (no gettext/.po files) -- a single in-memory
+         dict is enough for this tool's volume of text.
 
-Cada módulo declara su propio diccionario de strings, namespaced por módulo
-para que las claves nunca choquen entre archivos distintos:
+Each module declares its own strings dict, namespaced by module so keys never
+collide across files, and registers it once at import time:
 
     from . import i18n
     from .i18n import t
@@ -21,16 +22,11 @@ para que las claves nunca choquen entre archivos distintos:
     ...
     input(t("init_port.game_name_prompt"))
 
-Los valores con variables usan la sintaxis de str.format():
+Values with variables use `str.format()` syntax, e.g. `{"es": "  Juego:    {name}", ...}`
+passed as `t("init_port.summary_game", name=game_name)`.
 
-    "init_port.summary_game": {"es": "  Juego:    {name}", ...}
-    ...
-    print(t("init_port.summary_game", name=game_name))
-
-El idioma activo se fija UNA sola vez al arrancar -- config.py lo pregunta en
-el primer uso (o lo carga de ~/.psvita-toolkit/config.json en las siguientes)
-y llama a set_language() antes de mostrar cualquier otro menú, así que para
-cuando el resto del toolkit corre, t() ya devuelve el idioma correcto.
+See `docs/dev-notes/i18n.md` for the full usage guide and the language
+bootstrap ordering.
 """
 
 SUPPORTED_LANGUAGES = ("es", "en", "pt")
@@ -42,28 +38,47 @@ _catalog = {}
 
 
 def register(strings):
-    """Cada módulo llama esto una vez, al importarse, con su propio dict de
-    traducciones. Última en registrar gana si dos módulos usaran la misma
-    clave por error -- por eso la convención es namespacear con el nombre
-    del módulo como prefijo ('modulo.algo')."""
+    """!
+    @brief Merge a module's translation dict into the global catalog.
+    @param strings dict mapping namespaced keys (e.g. `"modulename.something"`)
+           to `{lang_code: text}` dicts.
+    @note Each module should call this once, at import time, with its own
+          dict. If two modules register the same key, the last one to
+          register wins -- hence the module-name-prefix namespacing
+          convention.
+    """
     _catalog.update(strings)
 
 
 def set_language(code):
+    """!
+    @brief Set the active UI language.
+    @param code Language code to activate. Ignored if not in `SUPPORTED_LANGUAGES`.
+    """
     global _lang
     if code in SUPPORTED_LANGUAGES:
         _lang = code
 
 
 def get_language():
+    """!
+    @brief Get the currently active language code.
+    @return One of `SUPPORTED_LANGUAGES`.
+    """
     return _lang
 
 
 def t(key, **kwargs):
-    """Traduce 'key' al idioma activo. Si la clave no está registrada,
-    devuelve la clave tal cual (mejor un texto en inglés/clave visible que un
-    KeyError que tumbe el menú). Si falta la traducción para el idioma activo
-    específicamente, cae a español y después a la primera que haya."""
+    """!
+    @brief Translate `key` to the active language.
+    @param key Namespaced string key (e.g. `"config.language_prompt"`).
+    @param kwargs Optional `str.format()` substitution values for the translated text.
+    @return The translated string. If `key` isn't registered, returns `key`
+            itself. If the active language's translation is missing, falls
+            back to `DEFAULT_LANGUAGE`, then to any available translation.
+    @note If `kwargs` is given but formatting fails (missing/extra
+          placeholder), returns the unformatted text rather than raising.
+    """
     entry = _catalog.get(key)
     if entry is None:
         return key

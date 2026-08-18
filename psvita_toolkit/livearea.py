@@ -1,9 +1,16 @@
-"""
-Adaptador de imágenes PNG a las specs de LiveArea de PS Vita -- integrado
-desde convert_livearea.py standalone. Igual lógica de conversión (crop/fit/
-stretch + indexado 8-bit), pero el directorio destino sale de la config del
-proyecto activo (extras/livearea/ dentro del port) en vez de una ruta
-hardcodeada a un solo juego.
+"""!
+@file livearea.py
+@brief Converts PNG images into PS Vita LiveArea assets (background, splash/lockscreen,
+       app icon, startup gate banner).
+
+@details
+Each source image is resized to the target asset's exact PS Vita dimensions (using a
+crop/fit/stretch mode) and then quantized to an 8-bit indexed PNG, which is a hard
+requirement of the PS Vita LiveArea format. Output is written to
+`<project_dir>/extras/livearea/`.
+
+See `docs/dev-notes/livearea.md` for the history behind this module and the resize-mode
+design rationale.
 """
 
 import shutil
