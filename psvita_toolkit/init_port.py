@@ -1,15 +1,24 @@
-"""
-Asistente "crear port nuevo desde cero" -- puerto a Python de init_new_port.sh,
-parametrizado con la config global en vez de rutas hardcodeadas.
+"""!
+@file init_port.py
+@brief Wizard to create a new PS Vita port from scratch: prerequisite checks,
+       prompts, cloning `soloader-boilerplate`, APK extraction/ABI/GLES
+       detection, decompilation, `git init`, and generating
+       `PORTING_PLAN.md`/`port_progress.md`/`CLAUDE.md`.
 
-Diferencia clave con el script original: NO copia porting_tools/ adentro del
-port nuevo. Ese es justamente el motivo de ser de este toolkit standalone --
-el port nuevo solo necesita `.psvita-toolkit.json` (que este wizard genera al
-final) para que el resto del toolkit (build_deploy, ftp_ops, livearea,
-crash_analyzer...) sepa operar sobre él desde afuera. Lo único que se copia
-DENTRO del repo del port son las skills de Claude Code y el scaffold de
-soloader-boilerplate en sí (source/lib/CMakeLists.txt), porque eso sí es
-código fuente del port.
+@details
+This is a Python port of `init_new_port.sh`, parametrized by the global
+config instead of hardcoded paths. Unlike that script, it does NOT copy
+`porting_tools/` into the new port -- the new port only needs the
+`.psvita-toolkit.json` this wizard writes at the end for the rest of the
+toolkit (`build_deploy`, `ftp_ops`, `livearea`, `crash_analyzer`, ...) to
+operate on it from outside. The only things copied INTO the port's own repo
+are the Claude Code skills and the `soloader-boilerplate` scaffold itself
+(`source/`, `lib/`, `CMakeLists.txt`), since those are genuinely the port's
+own source code.
+
+See `docs/dev-notes/init_port.md` for why this diverges from the original
+script this way, and the real bugs fixed in `_same_file()`,
+`_merge_tree_no_clobber()`, and the TITLEID-reuse flow in `prompt_inputs()`.
 """
 
 import os
@@ -765,12 +774,15 @@ def _have(cmd):
 
 
 def _same_file(a, b):
-    """os.path.samefile() compara por inode/dispositivo -- a diferencia de
-    comparar Path.resolve() como string, esto detecta correctamente el mismo
-    archivo aun en un filesystem case-insensitive (default en macOS), donde
-    dos rutas que difieren solo en mayúsculas/minúsculas (ej. 'ILLUSIA-vita'
-    vs 'Illusia-vita') apuntan al mismo archivo pero no son iguales como
-    string."""
+    """!
+    @brief Check whether `a` and `b` refer to the same file on disk.
+    @param a First path.
+    @param b Second path.
+    @return `True` if both paths resolve to the same inode/device.
+    @note Uses `os.path.samefile()` (inode/device comparison) rather than
+          comparing `Path.resolve()` as strings, so it's correct even on a
+          case-insensitive filesystem. See `docs/dev-notes/init_port.md`.
+    """
     try:
         return os.path.samefile(a, b)
     except OSError:
@@ -778,12 +790,16 @@ def _same_file(a, b):
 
 
 def _merge_tree_no_clobber(src, dst):
-    """Equivalente a 'cp -Rn src/. dst/' pero sin el bug de 'cp' en macOS:
-    el 'cp' de BSD devuelve exit status 1 con total normalidad cada vez que
-    se salta un archivo porque ya existe en destino (parte del propósito de
-    -n), aunque el merge en sí haya funcionado -- eso hacía fallar el wizard
-    entero con CalledProcessError al reintentar sobre una carpeta que ya
-    tenía contenido de un intento anterior."""
+    """!
+    @brief Recursively copy `src` into `dst` without overwriting files that
+           already exist in `dst`.
+    @param src Source directory tree.
+    @param dst Destination directory (created as needed).
+    @note Equivalent to `cp -Rn src/. dst/`, but without a bug affecting
+          macOS's BSD `cp` in this exact usage -- see
+          `docs/dev-notes/init_port.md` for why a shell `cp -Rn` was replaced
+          with this pure-Python walk.
+    """
     src, dst = Path(src), Path(dst)
     for item in sorted(src.rglob("*")):
         target = dst / item.relative_to(src)
@@ -847,9 +863,16 @@ def _used_titleids(base_dir):
 
 
 def _own_titleid(project_dir):
-    """TITLEID ya asignado a ESTE MISMO proyecto (si new_dir ya existe de un
-    intento anterior que falló a mitad de camino) -- se excluye del chequeo
-    de colisión, porque no es un choque con OTRO port, es continuar el mismo."""
+    """!
+    @brief Get the TITLEID this project directory already has, if any.
+    @param project_dir Path to the target project directory.
+    @return The 9-character TITLEID already assigned to `project_dir` (from a
+            previous attempt), or `None` if it has none yet or still has the
+            boilerplate's placeholder (`"SOLOADER0"`).
+    @note Excluded from the collision check in `prompt_inputs()` -- reusing a
+          project's OWN TITLEID isn't a collision with another port, it's
+          resuming the same one. See `docs/dev-notes/init_port.md`.
+    """
     cmake = Path(project_dir) / "CMakeLists.txt"
     if not cmake.exists():
         return None
@@ -1326,8 +1349,12 @@ def write_project_config(ctx):
 
 
 def run_wizard(global_cfg):
-    """Punto de entrada. Devuelve la config de proyecto lista para usar, o
-    None si el usuario canceló en algún punto."""
+    """!
+    @brief Entry point: run the full new-port creation wizard.
+    @param global_cfg Global config dict.
+    @return Ready-to-use per-project config dict, or `None` if the user
+            cancelled at any point.
+    """
     try:
         have_jadx, have_docker_so = check_prereqs(global_cfg)
         ctx = prompt_inputs(global_cfg)
