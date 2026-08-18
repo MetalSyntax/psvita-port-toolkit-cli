@@ -19,6 +19,48 @@ import sys
 import textwrap
 from pathlib import Path
 
+from . import i18n
+from .i18n import t
+
+STRINGS = {
+    "tui.press_enter": {
+        "es": "Presiona ENTER para continuar...",
+        "en": "Press ENTER to continue...",
+        "pt": "Pressione ENTER para continuar...",
+    },
+    "tui.footer_hint": {
+        "es": "↑/↓ mover · Enter elegir · 1-9 salto directo · 0/Q volver · M menú principal · Ctrl+C salir",
+        "en": "↑/↓ move · Enter select · 1-9 jump · 0/Q back · M main menu · Ctrl+C exit",
+        "pt": "↑/↓ mover · Enter selecionar · 1-9 atalho · 0/Q voltar · M menu principal · Ctrl+C sair",
+    },
+    "tui.interrupted": {
+        "es": "[!] Operación interrumpida.",
+        "en": "[!] Operation interrupted.",
+        "pt": "[!] Operação interrompida.",
+    },
+    "tui.unexpected_error": {
+        "es": "[-] Error inesperado: {error}",
+        "en": "[-] Unexpected error: {error}",
+        "pt": "[-] Erro inesperado: {error}",
+    },
+    "tui.required_value": {
+        "es": "Este valor es obligatorio.",
+        "en": "This value is required.",
+        "pt": "Este valor é obrigatório.",
+    },
+    "tui.path_not_found": {
+        "es": "No existe: {path}",
+        "en": "Doesn't exist: {path}",
+        "pt": "Não existe: {path}",
+    },
+    "tui.path_not_a_dir": {
+        "es": "No es un directorio: {path}",
+        "en": "Not a directory: {path}",
+        "pt": "Não é um diretório: {path}",
+    },
+}
+i18n.register(STRINGS)
+
 
 class C:
     HEADER = "\033[95m"
@@ -73,8 +115,8 @@ def getch():
     return ch
 
 
-def pause(msg="Presiona ENTER para continuar..."):
-    print(f"\n{C.DIM}[ {C.RESET}{C.BOLD}{msg}{C.RESET}{C.DIM} ]{C.RESET}")
+def pause(msg=None):
+    print(f"\n{C.DIM}[ {C.RESET}{C.BOLD}{msg or t('tui.press_enter')}{C.RESET}{C.DIM} ]{C.RESET}")
     try:
         input()
     except (EOFError, KeyboardInterrupt):
@@ -82,14 +124,15 @@ def pause(msg="Presiona ENTER para continuar..."):
 
 
 def confirm(prompt, default=True):
-    suffix = "[S/n]" if default else "[s/N]"
+    yes_letter = "y" if i18n.get_language() == "en" else "s"
+    suffix = f"[{yes_letter.upper()}/n]" if default else f"[{yes_letter}/N]"
     try:
         raw = input(f"{C.BOLD}{prompt}{C.RESET} {suffix} ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         return False
     if not raw:
         return default
-    return raw in ("s", "si", "sí", "y", "yes")
+    return raw in ("s", "si", "sí", "sim", "y", "yes")
 
 
 def print_banner(title, subtitle=None, breadcrumb=None, icon="🎮"):
@@ -108,8 +151,7 @@ def print_banner(title, subtitle=None, breadcrumb=None, icon="🎮"):
 
 def _footer_hint():
     print()
-    print(f"{C.DIM}↑/↓ mover · Enter elegir · 1-9 salto directo · "
-          f"0/Q volver · M menú principal · Ctrl+C salir{C.RESET}")
+    print(f"{C.DIM}{t('tui.footer_hint')}{C.RESET}")
 
 
 def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_extra=None):
@@ -162,9 +204,9 @@ def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_ext
             except (GoToMainMenu, ExitApp, SwitchProject):
                 raise
             except KeyboardInterrupt:
-                print(f"\n{C.YELLOW}[!] Operación interrumpida.{C.RESET}")
+                print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
             except Exception as e:  # noqa: BLE001 -- el menú nunca debe morir por un error de una acción
-                print(f"\n{C.RED}[-] Error inesperado: {e}{C.RESET}")
+                print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
             pause()
         elif c in ("0", "q", "Q"):
             return
@@ -219,15 +261,15 @@ def input_path(prompt, default=None, must_exist=False, is_dir=False, allow_blank
             elif allow_blank:
                 return ""
             else:
-                print(f"{C.RED}Este valor es obligatorio.{C.RESET}")
+                print(f"{C.RED}{t('tui.required_value')}{C.RESET}")
                 continue
         cleaned = clean_path_input(raw)
         p = Path(cleaned).expanduser()
         if must_exist and not p.exists():
-            print(f"{C.RED}No existe: {p}{C.RESET}")
+            print(f"{C.RED}{t('tui.path_not_found', path=p)}{C.RESET}")
             continue
         if is_dir and p.exists() and not p.is_dir():
-            print(f"{C.RED}No es un directorio: {p}{C.RESET}")
+            print(f"{C.RED}{t('tui.path_not_a_dir', path=p)}{C.RESET}")
             continue
         return str(p)
 

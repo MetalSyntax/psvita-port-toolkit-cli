@@ -16,11 +16,73 @@ import os
 import re
 from pathlib import Path
 
+from . import i18n
+from .i18n import t
+
 GLOBAL_CONFIG_DIR = Path.home() / ".psvita-toolkit"
 GLOBAL_CONFIG_PATH = GLOBAL_CONFIG_DIR / "config.json"
 PROJECT_CONFIG_FILENAME = ".psvita-toolkit.json"
 
 DEFAULT_VITA_PORT = 1337
+
+STRINGS = {
+    "config.first_run_title": {
+        "es": "🛠️  Primera vez -- configuración inicial del toolkit",
+        "en": "🛠️  First run -- initial toolkit setup",
+        "pt": "🛠️  Primeira vez -- configuração inicial da ferramenta",
+    },
+    "config.first_run_saved_at": {
+        "es": "Esto se pregunta una sola vez y se guarda en {path}",
+        "en": "This is only asked once and saved to {path}",
+        "pt": "Isso é perguntado uma única vez e salvo em {path}",
+    },
+    "config.required_value": {
+        "es": "Este valor es obligatorio.",
+        "en": "This value is required.",
+        "pt": "Este valor é obrigatório.",
+    },
+    "config.dir_not_exist_confirm": {
+        "es": "'{path}' no existe todavía -- ¿continuar de todas formas?",
+        "en": "'{path}' doesn't exist yet -- continue anyway?",
+        "pt": "'{path}' ainda não existe -- continuar mesmo assim?",
+    },
+    "config.required.base_dir": {
+        "es": "Carpeta base donde viven todos tus ports (ej. /Volumes/Seagate/PSVITA Develop)",
+        "en": "Base folder where all your ports live (e.g. /Volumes/Seagate/PSVITA Develop)",
+        "pt": "Pasta base onde ficam todos os seus ports (ex. /Volumes/Seagate/PSVITA Develop)",
+    },
+    "config.required.boilerplate_dir": {
+        "es": "Ruta a soloader-boilerplate (scaffold usado para ports nuevos)",
+        "en": "Path to soloader-boilerplate (scaffold used for new ports)",
+        "pt": "Caminho para soloader-boilerplate (scaffold usado para novos ports)",
+    },
+    "config.required.skills_source": {
+        "es": "Carpeta de skills de Claude Code a copiar en cada port nuevo",
+        "en": "Claude Code skills folder to copy into each new port",
+        "pt": "Pasta de skills do Claude Code para copiar em cada novo port",
+    },
+    "config.required.vitasdk": {
+        "es": "Ruta a VITASDK",
+        "en": "Path to VITASDK",
+        "pt": "Caminho para o VITASDK",
+    },
+    "config.language_prompt": {
+        "es": "Selecciona idioma / Select language / Selecione idioma:",
+        "en": "Selecciona idioma / Select language / Selecione idioma:",
+        "pt": "Selecciona idioma / Select language / Selecione idioma:",
+    },
+    "config.language_choice": {
+        "es": "Idioma [1]: ",
+        "en": "Idioma [1]: ",
+        "pt": "Idioma [1]: ",
+    },
+    "config.language_saved": {
+        "es": "[+] Idioma guardado: {name}. Podés cambiarlo después desde Configuración global.",
+        "en": "[+] Language saved: {name}. You can change it later from Global settings.",
+        "pt": "[+] Idioma salvo: {name}. Você pode alterá-lo depois em Configuração global.",
+    },
+}
+i18n.register(STRINGS)
 
 
 def _expand(p):
@@ -55,10 +117,10 @@ def save_global_config(cfg):
 
 
 REQUIRED_GLOBAL_KEYS = {
-    "base_dir": "Carpeta base donde viven todos tus ports (ej. /Volumes/Seagate/PSVITA Develop)",
-    "boilerplate_dir": "Ruta a soloader-boilerplate (scaffold usado para ports nuevos)",
-    "skills_source": "Carpeta de skills de Claude Code a copiar en cada port nuevo",
-    "vitasdk": "Ruta a VITASDK",
+    "base_dir": "config.required.base_dir",
+    "boilerplate_dir": "config.required.boilerplate_dir",
+    "skills_source": "config.required.skills_source",
+    "vitasdk": "config.required.vitasdk",
 }
 
 OPTIONAL_GLOBAL_KEYS = {
@@ -72,10 +134,41 @@ OPTIONAL_GLOBAL_KEYS = {
 }
 
 
+def prompt_language():
+    """Selector de idioma tri-lingüe -- se muestra ANTES de que el idioma
+    esté decidido, así que va hardcodeado en los 3 idiomas a la vez (no puede
+    salir de t(), todavía no hay idioma activo)."""
+    print(f"\n{t('config.language_prompt')}")
+    for i, code in enumerate(i18n.SUPPORTED_LANGUAGES, 1):
+        print(f"  {i}. {i18n.LANGUAGE_NAMES[code]}")
+    while True:
+        choice = input(f"\n{t('config.language_choice')}").strip() or "1"
+        if choice.isdigit() and 1 <= int(choice) <= len(i18n.SUPPORTED_LANGUAGES):
+            return i18n.SUPPORTED_LANGUAGES[int(choice) - 1]
+
+
+def ensure_language(cfg=None):
+    """Carga el idioma guardado (y lo activa) o, si es la primera vez,
+    lo pregunta y lo guarda. Se llama ANTES que ensure_global_config para que
+    todo lo que se pregunte después ya salga en el idioma elegido."""
+    if cfg is None:
+        cfg = load_global_config()
+    lang = cfg.get("language")
+    if lang in i18n.SUPPORTED_LANGUAGES:
+        i18n.set_language(lang)
+        return cfg
+    lang = prompt_language()
+    i18n.set_language(lang)
+    cfg["language"] = lang
+    save_global_config(cfg)
+    print(t("config.language_saved", name=i18n.LANGUAGE_NAMES[lang]))
+    return cfg
+
+
 def ensure_global_config(tui):
     """Carga la config global; si faltan claves requeridas, las pregunta
     interactivamente (una sola vez, quedan guardadas para la próxima)."""
-    cfg = load_global_config()
+    cfg = ensure_language(load_global_config())
     changed = False
 
     if cfg:
@@ -86,12 +179,12 @@ def ensure_global_config(tui):
     if missing:
         tui.clear()
         print(f"{tui.C.CYAN}{tui.C.BOLD}================================================================{tui.C.RESET}")
-        print(f"{tui.C.CYAN}{tui.C.BOLD}  🛠️  Primera vez -- configuración inicial del toolkit{tui.C.RESET}")
+        print(f"{tui.C.CYAN}{tui.C.BOLD}  {t('config.first_run_title')}{tui.C.RESET}")
         print(f"{tui.C.CYAN}{tui.C.BOLD}================================================================{tui.C.RESET}")
-        print(f"{tui.C.DIM}Esto se pregunta una sola vez y se guarda en {GLOBAL_CONFIG_PATH}{tui.C.RESET}\n")
+        print(f"{tui.C.DIM}{t('config.first_run_saved_at', path=GLOBAL_CONFIG_PATH)}{tui.C.RESET}\n")
 
         for key in missing:
-            desc = REQUIRED_GLOBAL_KEYS[key]
+            desc = t(REQUIRED_GLOBAL_KEYS[key])
             default = cfg.get(key, "")
             while True:
                 prompt = f"{tui.C.BOLD}{desc}{tui.C.RESET}"
@@ -101,10 +194,10 @@ def ensure_global_config(tui):
                 raw = input(prompt).strip() or default
                 raw = _expand(raw)
                 if not raw:
-                    print(f"{tui.C.RED}Este valor es obligatorio.{tui.C.RESET}")
+                    print(f"{tui.C.RED}{t('config.required_value')}{tui.C.RESET}")
                     continue
                 if key in ("boilerplate_dir", "skills_source", "vitasdk") and not os.path.isdir(raw):
-                    ok = tui.confirm(f"'{raw}' no existe todavía -- ¿continuar de todas formas?", default=False)
+                    ok = tui.confirm(t("config.dir_not_exist_confirm", path=raw), default=False)
                     if not ok:
                         continue
                 cfg[key] = raw
