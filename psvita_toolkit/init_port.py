@@ -45,6 +45,23 @@ def _same_file(a, b):
         return False
 
 
+def _merge_tree_no_clobber(src, dst):
+    """Equivalente a 'cp -Rn src/. dst/' pero sin el bug de 'cp' en macOS:
+    el 'cp' de BSD devuelve exit status 1 con total normalidad cada vez que
+    se salta un archivo porque ya existe en destino (parte del propósito de
+    -n), aunque el merge en sí haya funcionado -- eso hacía fallar el wizard
+    entero con CalledProcessError al reintentar sobre una carpeta que ya
+    tenía contenido de un intento anterior."""
+    src, dst = Path(src), Path(dst)
+    for item in sorted(src.rglob("*")):
+        target = dst / item.relative_to(src)
+        if item.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+
+
 def _have_docker_image(image):
     if not _have("docker"):
         return False
@@ -203,7 +220,7 @@ def setup_repo_dir(global_cfg, ctx):
 
         shutil.rmtree(Path(tmp_clone) / ".git", ignore_errors=True)
         new_dir.mkdir(parents=True, exist_ok=True)
-        _sh(["cp", "-Rn", f"{tmp_clone}/.", str(new_dir) + "/"])
+        _merge_tree_no_clobber(tmp_clone, new_dir)
 
     cmake_path = new_dir / "CMakeLists.txt"
     if cmake_path.exists():
