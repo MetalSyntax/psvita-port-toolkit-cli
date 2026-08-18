@@ -96,6 +96,21 @@ def _used_titleids(base_dir):
     return used
 
 
+def _own_titleid(project_dir):
+    """TITLEID ya asignado a ESTE MISMO proyecto (si new_dir ya existe de un
+    intento anterior que falló a mitad de camino) -- se excluye del chequeo
+    de colisión, porque no es un choque con OTRO port, es continuar el mismo."""
+    cmake = Path(project_dir) / "CMakeLists.txt"
+    if not cmake.exists():
+        return None
+    try:
+        text = cmake.read_text(errors="ignore")
+    except OSError:
+        return None
+    m = re.search(r'VITA_TITLEID\s+"([A-Za-z0-9]{9})"', text)
+    return m.group(1) if m and m.group(1) != "SOLOADER0" else None
+
+
 def prompt_inputs(global_cfg):
     tui.clear()
     tui.print_banner("Crear port nuevo: Android → PS Vita", icon="🆕")
@@ -117,12 +132,24 @@ def prompt_inputs(global_cfg):
     vita_ip = input(f"{C.BOLD}IP de la PS Vita de pruebas{C.RESET} [192.168.1.100]: ").strip() or "192.168.1.100"
 
     base_dir = Path(global_cfg["base_dir"])
+    new_dir = base_dir / folder_name
+    own_id = _own_titleid(new_dir)
+
     used_ids = _used_titleids(base_dir)
+    if own_id:
+        used_ids.discard(own_id)
+
     print(f"\n{C.DIM}TITLEIDs ya usados en {base_dir} (no reusar, colisiona en LiveArea):{C.RESET}")
     for t in sorted(used_ids):
         print(f"    {t}")
+    if own_id:
+        print(f"{C.YELLOW}[!] {new_dir} ya tiene TITLEID '{own_id}' de un intento anterior -- "
+              f"Enter para reusarlo y continuar el mismo proyecto.{C.RESET}")
+
     while True:
-        titleid = input(f"{C.BOLD}TITLEID nuevo, 9 caracteres alfanuméricos{C.RESET} (ej. PSVXX0001): ").strip().upper()
+        prompt = f"{C.BOLD}TITLEID{C.RESET} (9 caracteres alfanuméricos, ej. PSVXX0001)"
+        prompt += f" [{own_id}]" if own_id else ""
+        titleid = input(f"{prompt}: ").strip().upper() or (own_id or "")
         if len(titleid) != 9:
             print(f"{C.RED}Debe tener exactamente 9 caracteres.{C.RESET}")
             continue
@@ -131,7 +158,6 @@ def prompt_inputs(global_cfg):
             continue
         break
 
-    new_dir = base_dir / folder_name
     if new_dir.exists():
         print(f"{C.YELLOW}[!] Ya existe {new_dir} -- se reutiliza tal cual está y se continúa.{C.RESET}")
 
