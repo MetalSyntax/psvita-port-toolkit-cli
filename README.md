@@ -36,6 +36,9 @@ psvita-toolkit
 
 La primera vez pregunta (y guarda en `~/.psvita-toolkit/config.json`, no se vuelve a preguntar):
 
+- **Idioma / Language / Idioma** -- Español, English o Português. Se guarda y queda fijo para
+  todas las siguientes veces; cambialo cuando quieras desde "Configuración global" en el menú de
+  selección de proyecto.
 - **BASE_DIR** -- la carpeta donde viven todos tus ports (ahí es donde busca/lista los proyectos
   existentes).
 - **soloader-boilerplate** -- el scaffold que se clona al crear un port nuevo.

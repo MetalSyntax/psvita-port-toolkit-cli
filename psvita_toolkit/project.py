@@ -186,6 +186,11 @@ STRINGS = {
         "en": "Global settings",
         "pt": "Configuração global",
     },
+    "project.change_language_confirm": {
+        "es": "Idioma actual: {name}. ¿Querés cambiarlo?",
+        "en": "Current language: {name}. Do you want to change it?",
+        "pt": "Idioma atual: {name}. Deseja alterá-lo?",
+    },
     "project.config_saved": {
         "es": "[+] Configuración guardada.",
         "en": "[+] Settings saved.",
@@ -364,6 +369,15 @@ def select_or_create_project(global_cfg):
 def _edit_global_config(global_cfg):
     tui.clear()
     tui.print_banner(t("project.global_config_banner_title"), icon="⚙️")
+
+    current_lang = i18n.get_language()
+    if tui.confirm(t("project.change_language_confirm", name=i18n.LANGUAGE_NAMES[current_lang]), default=False):
+        new_lang = cfgmod.prompt_language()
+        i18n.set_language(new_lang)
+        global_cfg["language"] = new_lang
+        cfgmod.save_global_config(global_cfg)
+        print(f"\n{C.GREEN}{t('config.language_saved', name=i18n.LANGUAGE_NAMES[new_lang])}{C.RESET}\n")
+
     for key, desc in cfgmod.REQUIRED_GLOBAL_KEYS.items():
         current = global_cfg.get(key, "")
         raw = input(f"{C.BOLD}{t(desc)}{C.RESET}\n[{current}] > ").strip()
