@@ -12,6 +12,7 @@ soloader-boilerplate en sí (source/lib/CMakeLists.txt), porque eso sí es
 código fuente del port.
 """
 
+import os
 import re
 import shutil
 import subprocess
