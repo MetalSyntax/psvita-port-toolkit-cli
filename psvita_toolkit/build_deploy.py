@@ -377,7 +377,31 @@ _CMAKE_BUILD_TYPES = {
 }
 
 
-def _run_cmake_direct(project_dir, build_dir, preset, extra_args):
+def _vitasdk_env(global_cfg):
+    """!
+    @brief Build a subprocess environment with `VITASDK` and `$VITASDK/bin`
+           set up, based on `global_cfg`.
+    @param global_cfg Global config dict; reads `vitasdk`.
+    @return A copy of `os.environ` with `VITASDK` set and `$VITASDK/bin`
+            prepended to `PATH` (only if not already there).
+    @note Without this, VITASDK toolchain executables invoked by name during
+          the build (`vita-libs-gen`, `vita-elf-create`, `vita-make-fself`,
+          `vita-mksfoex`, `vita-pack-vpk`, ...) aren't found on `PATH`. A
+          project's own `build.sh` normally does this itself -- this fallback
+          exists for projects that don't have one. See
+          `docs/dev-notes/build_deploy.md`.
+    """
+    env = os.environ.copy()
+    vitasdk = (global_cfg or {}).get("vitasdk", "")
+    if vitasdk:
+        env.setdefault("VITASDK", vitasdk)
+        vitasdk_bin = os.path.join(vitasdk, "bin")
+        if os.path.isdir(vitasdk_bin) and vitasdk_bin not in env.get("PATH", ""):
+            env["PATH"] = f"{vitasdk_bin}:{env.get('PATH', '')}"
+    return env
+
+
+def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
     """!
     @brief Fallback build path for projects with no `build.sh`: run `cmake`
            then `make` directly in `build_dir`.
@@ -388,6 +412,8 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args):
     @param preset Preset value; mapped to `-DCMAKE_BUILD_TYPE=...` unless
            `"custom"` or falsy.
     @param extra_args Extra arguments appended to the `cmake` invocation.
+    @param global_cfg Global config dict, used to set up the VITASDK
+           toolchain's environment (see `_vitasdk_env()`).
     @return `True` if both `cmake` and `make` exited with code 0.
     @note Legacy ports adopted from before this toolkit (created by hand with
           `cmake`/`make` directly, never from `soloader-boilerplate`) have no
@@ -397,12 +423,14 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args):
     build_path.mkdir(parents=True, exist_ok=True)
     print(f"{C.YELLOW}{t('build_deploy.no_build_sh_fallback', build_dir=build_path)}{C.RESET}")
 
+    env = _vitasdk_env(global_cfg)
+
     cmake_args = ["cmake", str(project_dir)]
     if preset and preset != "custom":
         cmake_args.append(f"-DCMAKE_BUILD_TYPE={_CMAKE_BUILD_TYPES.get(preset, 'Release')}")
     cmake_args.extend(extra_args or [])
     print(f"{t('build_deploy.running_command', cmd=' '.join(cmake_args))}\n")
-    r = subprocess.run(cmake_args, cwd=build_path)
+    r = subprocess.run(cmake_args, cwd=build_path, env=env)
     if r.returncode != 0:
         print(f"{C.RED}{t('build_deploy.cmake_configure_failed')}{C.RESET}")
         return False
@@ -410,11 +438,11 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args):
     jobs = subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True, text=True).stdout.strip() or "4"
     make_args = ["make", f"-j{jobs}"]
     print(f"\n{t('build_deploy.running_command', cmd=' '.join(make_args))}\n")
-    r = subprocess.run(make_args, cwd=build_path)
+    r = subprocess.run(make_args, cwd=build_path, env=env)
     return r.returncode == 0
 
 
-def _run_build(project_dir, preset, extra_args, build_dir="build"):
+def _run_build(project_dir, preset, extra_args, build_dir="build", global_cfg=None):
     """!
     @brief Run the project's `build.sh` with the chosen preset and extra args,
            falling back to a direct `cmake`+`make` invocation if the project
@@ -425,11 +453,13 @@ def _run_build(project_dir, preset, extra_args, build_dir="build"):
     @param extra_args Extra list of arguments to append after the preset.
     @param build_dir Build output directory, relative to `project_dir` --
            only used by the `build.sh`-less fallback path.
+    @param global_cfg Global config dict -- only used by the `build.sh`-less
+           fallback path, to set up the VITASDK toolchain's environment.
     @return `True` if the build exited with code 0.
     """
     build_sh = project_dir / "build.sh"
     if not build_sh.exists():
-        return _run_cmake_direct(project_dir, build_dir, preset, extra_args)
+        return _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg)
     if not os.access(build_sh, os.X_OK):
         print(f"{C.RED}{t('build_deploy.build_sh_not_found', build_sh=build_sh)}{C.RESET}")
         return False
@@ -585,7 +615,7 @@ def build_and_deploy_wizard(project_cfg, global_cfg):
     print(f"  {t('build_deploy.building_header', game_name=project_cfg['game_name'], preset=preset, target=target)}")
     print(f"{C.CYAN}{C.BOLD}================================================================{C.RESET}\n")
 
-    ok = _run_build(project_dir, preset, extra_args, project_cfg.get("build_dir", "build"))
+    ok = _run_build(project_dir, preset, extra_args, project_cfg.get("build_dir", "build"), global_cfg)
     if not ok:
         print(f"{C.RED}{t('build_deploy.build_failed')}{C.RESET}")
         return

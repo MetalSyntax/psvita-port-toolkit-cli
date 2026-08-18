@@ -34,6 +34,18 @@ folder. The preset still maps to `-DCMAKE_BUILD_TYPE=...` in this path; project-
 flags (auto-discovered from `build.sh` for boilerplate-based ports) simply don't exist for these
 projects, since there's no `build.sh` to scan.
 
+**Real bug hit in practice**: the first version of this fallback ran `cmake`/`make` with the
+toolkit's own inherited environment, unchanged. That's missing exactly what every hand-written
+`build.sh` normally does at its top -- `export VITASDK=...; export PATH="$VITASDK/bin:$PATH"`.
+Without it, `make` fails partway through with `vita-libs-gen: command not found` (and would hit
+the same wall later on `vita-elf-create`/`vita-make-fself`/`vita-mksfoex`/`vita-pack-vpk`, all of
+which live in `$VITASDK/bin/` and get invoked by bare name from the Vita CMake toolchain's custom
+build steps). `_vitasdk_env()` now builds the subprocess environment explicitly from
+`global_cfg["vitasdk"]` before running either command. This came up specifically because a user
+deleted a legacy project's `build.sh` on the assumption that this toolkit's generic fallback
+fully replaces it -- which is the right assumption, but meant the fallback had to actually be a
+complete replacement, not just the `cmake`/`make` calls alone.
+
 ## Why `UNIVERSAL_PRESETS` stores i18n keys, not resolved text
 
 `UNIVERSAL_PRESETS` is a module-level list, built once at import time — which happens before
