@@ -1,0 +1,16 @@
+# macOS metadata (frecuente en discos externos no-HFS+, ej. este Seagate)
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp

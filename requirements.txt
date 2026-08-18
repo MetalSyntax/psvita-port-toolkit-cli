@@ -1,0 +1,10 @@
+Pillow>=10.0
+
+# Opcionales, cada uno solo hace falta si usás esa función puntual:
+# pyobjc          -- automatización de clics/teclado en Vita3K (macOS)
+# deep-translator -- traducción en lote de los .md del proyecto
+#
+# vita-parse-core (https://github.com/devnoname120/vita-parse-core o el fork
+# que uses) no se instala por pip -- clonalo aparte y apuntá
+# 'vita_parse_core_dir' en ~/.psvita-toolkit/config.json hacia esa carpeta
+# para poder usar el analizador de crash dumps.
