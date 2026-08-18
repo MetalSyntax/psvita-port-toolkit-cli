@@ -496,9 +496,9 @@ STRINGS = {
         "pt": 'Tabela JNI (FalsoJNI): registrar exports + callbacks para o "Java".',
     },
     "init_port.plan_check_first_boot": {
-        "es": "Primer arranque (Vita3K primero, consola real después).",
-        "en": "First boot (Vita3K first, real console after).",
-        "pt": "Primeira inicialização (Vita3K primeiro, console real depois).",
+        "es": "Primer arranque en consola real.",
+        "en": "First boot on real hardware.",
+        "pt": "Primeira inicialização em hardware real.",
     },
     "init_port.plan_check_graphics": {
         "es": "Gráficos (wrappers GL según versión detectada).",
@@ -721,9 +721,9 @@ STRINGS = {
         "pt": "Bootstrap do loader guiado pela skill `psvita-porting`.",
     },
     "init_port.claude_md_wf3": {
-        "es": "Build/deploy con el toolkit standalone → probar en Vita3K → probar en consola real.",
-        "en": "Build/deploy with the standalone toolkit → test on Vita3K → test on real console.",
-        "pt": "Build/deploy com a ferramenta standalone → testar no Vita3K → testar no console real.",
+        "es": "Build/deploy con el toolkit standalone → probar en consola real.",
+        "en": "Build/deploy with the standalone toolkit → test on real hardware.",
+        "pt": "Build/deploy com a ferramenta standalone → testar em hardware real.",
     },
     "init_port.claude_md_wf4": {
         "es": "Un bug a la vez, guiado por el log real -- skill `so-crash-triage`.",

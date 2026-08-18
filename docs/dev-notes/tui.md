@@ -14,7 +14,7 @@ easy to reason about and composes cleanly with ordinary stdout.
 `getch()` reads a single keypress (including a full arrow-key escape sequence) without waiting
 for Enter, using `termios`/`tty` raw mode — a POSIX-only mechanism. Windows would need a
 completely different implementation (`msvcrt`), which was out of scope: the whole toolkit's
-development workflow (Vita3K, VITASDK, jadx, Docker-based Ghidra decompilation) targets macOS
+development workflow (VITASDK, jadx, Docker-based Ghidra decompilation) targets macOS
 specifically, so this wasn't worth generalizing.
 
 ## Why navigation is exception-based (`GoToMainMenu`, `ExitApp`, `SwitchProject`)

@@ -16,7 +16,6 @@ See `docs/dev-notes/__main__.md` for the rationale behind this structure.
 
 from pathlib import Path
 
-from . import automation_mac
 from . import build_deploy
 from . import config as cfgmod
 from . import crash_analyzer
@@ -150,65 +149,10 @@ STRINGS = {
         "en": "\n[+] Project config saved.",
         "pt": "\n[+] Configuração do projeto salva.",
     },
-    "main.automation.no_quartz": {
-        "es": "[!] pyobjc no instalado -- pip install pyobjc para usar esto.",
-        "en": "[!] pyobjc not installed -- pip install pyobjc to use this.",
-        "pt": "[!] pyobjc não instalado -- pip install pyobjc para usar isto.",
-    },
-    "main.automation.click_x": {
-        "es": "X: ",
-        "en": "X: ",
-        "pt": "X: ",
-    },
-    "main.automation.click_y": {
-        "es": "Y: ",
-        "en": "Y: ",
-        "pt": "Y: ",
-    },
-    "main.automation.click_count": {
-        "es": "Cantidad de clics [1]: ",
-        "en": "Number of clicks [1]: ",
-        "pt": "Quantidade de cliques [1]: ",
-    },
-    "main.automation.click_done": {
-        "es": "[+] Clic hecho en ({x}, {y}).",
-        "en": "[+] Click done at ({x}, {y}).",
-        "pt": "[+] Clique feito em ({x}, {y}).",
-    },
-    "main.automation.double_click_done": {
-        "es": "[+] Doble clic realizado sobre el primer juego de la biblioteca.",
-        "en": "[+] Double-click done on the first game in the library.",
-        "pt": "[+] Duplo clique realizado no primeiro jogo da biblioteca.",
-    },
-    "main.automation.click_coord": {
-        "es": "Clic en una coordenada de pantalla",
-        "en": "Click at a screen coordinate",
-        "pt": "Clique em uma coordenada da tela",
-    },
-    "main.automation.double_click_game": {
-        "es": "Doble clic en el primer juego de la biblioteca de Vita3K",
-        "en": "Double-click the first game in the Vita3K library",
-        "pt": "Duplo clique no primeiro jogo da biblioteca do Vita3K",
-    },
-    "main.automation.bring_front": {
-        "es": "Traer Vita3K al frente",
-        "en": "Bring Vita3K to the front",
-        "pt": "Trazer o Vita3K para frente",
-    },
-    "main.automation.title": {
-        "es": "Automatización Vita3K (Quartz)",
-        "en": "Vita3K Automation (Quartz)",
-        "pt": "Automação do Vita3K (Quartz)",
-    },
     "main.menu.build_deploy": {
         "es": "🔨 Compilar y Desplegar (asistente: destino + preset + despliegue)",
         "en": "🔨 Build and Deploy (wizard: target + preset + deploy)",
         "pt": "🔨 Compilar e Implantar (assistente: destino + preset + implantação)",
-    },
-    "main.menu.redeploy": {
-        "es": "🎮 Re-desplegar el último build en Vita3K (sin recompilar)",
-        "en": "🎮 Redeploy the last build to Vita3K (no rebuild)",
-        "pt": "🎮 Reimplantar o último build no Vita3K (sem recompilar)",
     },
     "main.menu.upload_eboot": {
         "es": "⚡ Subir SOLO eboot.bin a la PS Vita (rápido)",
@@ -244,11 +188,6 @@ STRINGS = {
         "es": "🧰 Utilidades (limpieza, decompilar, tests, símbolos, assets, docs)",
         "en": "🧰 Utilities (cleanup, decompile, tests, symbols, assets, docs)",
         "pt": "🧰 Utilitários (limpeza, decompilar, testes, símbolos, assets, docs)",
-    },
-    "main.menu.automation": {
-        "es": "🖱️  Automatización Vita3K (clics/teclado simulados, macOS)",
-        "en": "🖱️  Vita3K Automation (simulated clicks/keyboard, macOS)",
-        "pt": "🖱️  Automação do Vita3K (cliques/teclado simulados, macOS)",
     },
     "main.menu.project_settings": {
         "es": "⚙️  Configuración de este proyecto",
@@ -357,31 +296,6 @@ def _project_settings(project_cfg):
     print(f"{C.GREEN}{t('main.settings.saved')}{C.RESET}")
 
 
-def _automation_submenu():
-    if not automation_mac.HAVE_QUARTZ:
-        print(f"{C.YELLOW}{t('main.automation.no_quartz')}{C.RESET}")
-        return
-
-    def do_click():
-        x = float(input(t("main.automation.click_x")).strip())
-        y = float(input(t("main.automation.click_y")).strip())
-        n = input(t("main.automation.click_count")).strip()
-        automation_mac.click(x, y, int(n) if n else 1)
-        print(f"{C.GREEN}{t('main.automation.click_done', x=x, y=y)}{C.RESET}")
-
-    def do_double_click_game():
-        automation_mac.bring_to_front("Vita3K")
-        if automation_mac.double_click_first_game_row():
-            print(f"{C.GREEN}{t('main.automation.double_click_done')}{C.RESET}")
-
-    items = [
-        (t("main.automation.click_coord"), do_click),
-        (t("main.automation.double_click_game"), do_double_click_game),
-        (t("main.automation.bring_front"), lambda: automation_mac.bring_to_front("Vita3K")),
-    ]
-    tui.run_menu(t("main.automation.title"), items, icon="🖱️")
-
-
 def _raise_switch_project():
     raise tui.SwitchProject()
 
@@ -407,8 +321,6 @@ def show_project_menu(project_cfg, global_cfg):
     items = [
         (t("main.menu.build_deploy"),
          lambda: build_deploy.build_and_deploy_wizard(project_cfg, global_cfg)),
-        (t("main.menu.redeploy"),
-         lambda: build_deploy.deploy_only_vita3k(project_cfg, global_cfg)),
         (t("main.menu.upload_eboot"), lambda: ftp_ops.upload_eboot(project_cfg, global_cfg)),
         (t("main.menu.upload_vpk"), lambda: ftp_ops.upload_vpk(project_cfg, global_cfg)),
         (t("main.menu.download_logs"),
@@ -418,7 +330,6 @@ def show_project_menu(project_cfg, global_cfg):
         (t("main.menu.shaders"), lambda: _shaders_submenu(project_cfg, global_cfg)),
         (t("main.menu.utilities"),
          lambda: _utils_submenu(project_cfg, global_cfg)),
-        (t("main.menu.automation"), _automation_submenu),
         (t("main.menu.project_settings"), lambda: _project_settings(project_cfg)),
         (t("main.menu.switch_project"), _raise_switch_project),
         (f"{C.RED}{t('main.menu.exit')}{C.RESET}", _raise_exit_app),

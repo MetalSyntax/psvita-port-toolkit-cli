@@ -1,7 +1,6 @@
 Pillow>=10.0
 
-# Opcionales, cada uno solo hace falta si usás esa función puntual:
-# pyobjc          -- automatización de clics/teclado en Vita3K (macOS)
+# Opcional, solo hace falta si usás esa función puntual:
 # deep-translator -- traducción en lote de los .md del proyecto
 #
 # vita-parse-core (https://github.com/devnoname120/vita-parse-core o el fork

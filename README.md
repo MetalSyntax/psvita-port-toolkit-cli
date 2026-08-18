@@ -2,9 +2,13 @@
 
 Herramienta standalone (TUI de flechas, sin dependencias exóticas) para llevar un port de
 Android (soloader) a PS Vita **de punta a punta**: crear el port desde cero, compilar,
-desplegar en Vita3K o en una consola real por FTP, bajar logs y crash dumps, analizarlos,
+desplegar en una consola real por FTP, bajar logs y crash dumps, analizarlos,
 sincronizar shaders, generar los assets de LiveArea, y más -- todo desde un solo lugar,
 operando sobre **cualquier** carpeta de port que le indiques.
+
+> **Nota:** no hay soporte de despliegue/build para el emulador Vita3K -- se eliminó tras
+> confirmar (con Prince of Persia Classic) que sus limitaciones lo hacen inviable para este tipo
+> de port. Ver `docs/dev-notes/build_deploy.md`.
 
 Nace de consolidar `porting_tools/` de 5 ports reales (Zenonia 2/3/4, Dungeon Hunter 2, Advena) +
 `init_new_port.sh` + `convert_livearea.py`, tomando el superset de funcionalidad de todos y
@@ -19,8 +23,7 @@ git clone <este-repo> psvita-port-toolkit-cli
 cd psvita-port-toolkit-cli
 pip install -r requirements.txt
 
-# opcionales, solo si vas a usar esas funciones puntuales:
-pip install pyobjc            # automatización de clics/teclado en Vita3K (macOS)
+# opcional, solo si vas a usar esa función puntual:
 pip install deep-translator   # traducir los .md del proyecto en lote
 ```
 
@@ -63,14 +66,13 @@ Después de eso, cada vez que abrís el toolkit elegís:
 
 Una vez dentro de un proyecto, todo es un menú de flechas navegable:
 
-- 🔨 **Compilar y Desplegar** -- asistente guiado: destino (Vita3K / PS Vita física / solo
+- 🔨 **Compilar y Desplegar** -- asistente guiado: destino (PS Vita física / solo
   compilar) → preset de build → despliegue automático según el destino. Los presets universales
   (Debug/Release/RelWithDebInfo/MinSizeRel) siempre están, y además se **auto-descubren** banderas
-  extra grepeando el `build.sh` del proyecto activo -- así ningún flag específico de un motor
-  (NEON, dirty-rect, downsample, turbo, lo que sea) queda hardcodeado en la herramienta genérica;
-  simplemente aparece si ESE port lo define.
-- 🎮 **Re-desplegar en Vita3K** sin recompilar (hot-swap de `eboot.bin`, con doble clic automático
-  opcional en el ícono del juego vía Quartz).
+  extra grepeando el `build.sh` del proyecto activo, o las opciones `option(...)` del propio
+  `CMakeLists.txt` si el proyecto no tiene `build.sh` (port legacy) -- así ningún flag específico
+  de un motor (NEON, dirty-rect, downsample, turbo, lo que sea) queda hardcodeado en la
+  herramienta genérica; simplemente aparece si ESE port lo define.
 - ⚡📦 **Subir a la PS Vita física** por FTP -- solo el `eboot.bin` (rápido) o el VPK completo.
 - 📥 **Descargar logs / crash dumps** -- tres modos: el último automático, elegir uno específico
   de lo que hay *ahora* en la consola, o navegar el **historial local** de lo ya descargado antes
@@ -84,8 +86,6 @@ Una vez dentro de un proyecto, todo es un menú de flechas navegable:
   de `libshacccg.suprx`.
 - 🧰 **Utilidades** -- limpieza de basura de macOS, re-decompilación, tests de host del proyecto,
   búsqueda de símbolos por patrón, verificación de assets (local vs. consola), traducción de docs.
-- 🖱️ **Automatización Vita3K** -- clics/teclado simulados vía Quartz (la UI Qt de Vita3K no
-  responde a accesibilidad de AppleScript).
 - ⚙️ **Configuración del proyecto** / 🔁 **Cambiar de proyecto** / ❌ **Salir**.
 
 Navegación consistente en **todo** el toolkit: `↑/↓` mover, `Enter` elegir, `1-9` salto directo,
@@ -100,11 +100,10 @@ psvita_toolkit/
   tui.py             # framework de menú de flechas reutilizable (sin curses)
   project.py         # selector de proyecto (continuar / lista / crear nuevo)
   init_port.py        # asistente "crear port nuevo desde cero"
-  build_deploy.py     # asistente de build + despliegue (Vita3K/PS Vita/local)
+  build_deploy.py     # asistente de build + despliegue (PS Vita física/local)
   ftp_ops.py          # todo lo que habla FTP con la consola
   livearea.py         # conversor de assets de LiveArea
   crash_analyzer.py   # analizador de .psp2dmp (vita-parse-core)
-  automation_mac.py   # clics/teclado simulados (Quartz) para Vita3K
   utils.py            # limpieza, re-decompilación, tests, símbolos, docs
 ```
 

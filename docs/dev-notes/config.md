@@ -11,8 +11,9 @@ Global config (`~/.psvita-toolkit/config.json`) and per-project config
 (`<port_dir>/.psvita-toolkit.json`) are deliberately separate files, not one big config:
 
 - Global config holds machine-level paths (`BASE_DIR`, `soloader-boilerplate`, Claude Code
-  skills, `VITASDK`, `Vita3K.app`) that are the same no matter which port you're working on.
-  Asked once, ever, on this machine.
+  skills, `VITASDK`) that are the same no matter which port you're working on. Asked once,
+  ever, on this machine. (It used to also hold Vita3K emulator paths -- removed along with
+  Vita3K support entirely, see `docs/dev-notes/build_deploy.md`.)
 - Per-project config holds per-port facts (name, slug, TITLEID, test Vita IP/port, build dir)
   that are specific to one port and travel with it — it lives *inside* the port's own
   directory, so a port stays self-describing even without the toolkit installed alongside it.

@@ -1,5 +1,22 @@
 # `build_deploy.py` — Developer Notes
 
+## Vita3K emulator support was removed entirely
+
+This module used to offer "Vita3K" as a build/deploy target alongside "PS Vita física" and
+"solo compilar", with a whole hot-swap-and-relaunch deploy flow (`_deploy_vita3k()`,
+`deploy_only_vita3k()`) and a companion `automation_mac.py` module (Quartz-based synthetic
+clicks/keyboard, since Vita3K's Qt UI doesn't respond to AppleScript accessibility clicks) to
+automate launching the game inside it.
+
+All of that was removed after confirming, with Prince of Persia Classic, that the emulator's
+limitations make it unusable for this class of port — not a one-off quirk of that one game, but
+a decision meant to apply across every port this toolkit manages, so Vita3K is no longer offered
+anywhere in the UI at all: `_choose_target()` only offers `"psvita"`/`"local"` now, and
+`automation_mac.py` + its whole menu entry are gone. If a future port turns out to work fine on
+Vita3K after all, re-adding a target option is straightforward — the removal was a product
+decision based on confirmed real-world testing, not a technical limitation of the toolkit's
+architecture.
+
 ## Why build presets are auto-discovered instead of hardcoded
 
 This wizard generalizes the various `build_and_install.sh` scripts that used to live in each
@@ -27,12 +44,8 @@ no wrapper script ever written — has no `build.sh` at all, and the wizard used
 
 `_run_build()` now distinguishes two cases: `build.sh` **exists but isn't executable** (a real
 problem, likely a lost `chmod +x` — still reported as an error), versus `build.sh` **doesn't
-exist at all** (a legacy/adopted project), which falls back to `_run_cmake_direct()`: run
-`cmake <project_dir>` then `make -jN` directly inside the project's `build_dir`, reusing
-whatever CMake cache is already there if the project was previously built manually in that same
-folder. The preset still maps to `-DCMAKE_BUILD_TYPE=...` in this path; project-specific extra
-flags (auto-discovered from `build.sh` for boilerplate-based ports) simply don't exist for these
-projects, since there's no `build.sh` to scan.
+exist at all** (a legacy/adopted project), which falls back to `_run_cmake_direct()` (see below
+for how it actually builds and where project-specific flags come from in this path).
 
 **Real gap found in practice (Prince of Persia Classic)**: this adopted, `build.sh`-less project
 turned out to have a real `build_and_install.sh` before it was deleted (on the reasonable

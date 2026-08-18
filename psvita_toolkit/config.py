@@ -5,8 +5,7 @@
 @details
 Two tiers:
   - Global config (`~/.psvita-toolkit/config.json`): paths that don't depend on the active
-    port (`BASE_DIR`, `soloader-boilerplate`, Claude Code skills, `VITASDK`, `Vita3K.app`).
-    Asked once.
+    port (`BASE_DIR`, `soloader-boilerplate`, Claude Code skills, `VITASDK`). Asked once.
   - Per-project config (`<port_dir>/.psvita-toolkit.json`): per-port data (name, slug,
     TITLEID, test Vita IP, etc). Created when initializing a new port, or auto-detected
     ("adopted") the first time an existing port without this file is opened.
@@ -142,9 +141,6 @@ REQUIRED_GLOBAL_KEYS = {
 }
 
 OPTIONAL_GLOBAL_KEYS = {
-    "vita3k_app": "/Applications/Vita3K.app/Contents/MacOS/Vita3K",
-    "vita3k_fs_dir": str(Path.home() / "Library/Application Support/Vita3K/Vita3K/fs/ux0/app"),
-    "vita3k_logs_dir": str(Path.home() / "Library/Application Support/Vita3K/Vita3K/logs"),
     "vita_parse_core_dir": str(Path.home() / "vita-tools/vita-parse-core"),
     "vpn_disconnect_cmd": "",
     "recent_projects": [],

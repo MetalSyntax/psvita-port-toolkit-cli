@@ -2,7 +2,7 @@
 @file build_deploy.py
 @brief Build and deploy wizard: target selection, build presets, running the
        project's `build.sh`, locating the resulting `.vpk`, and deploying to
-       Vita3K or a physical PS Vita.
+       a physical PS Vita.
 
 @details
 Build presets are not hardcoded per game: the 4 universal ones (Debug,
@@ -22,11 +22,9 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 from . import i18n
-from . import tui
 from .i18n import t
 from .tui import C
 
@@ -66,11 +64,6 @@ STRINGS = {
         "es": "[1/3] ¿Cuál es el destino de ejecución?",
         "en": "[1/3] What's the execution target?",
         "pt": "[1/3] Qual é o destino de execução?",
-    },
-    "build_deploy.target_vita3k": {
-        "es": "Vita3K            (Emulador -- iteración rápida)",
-        "en": "Vita3K            (Emulator -- fast iteration)",
-        "pt": "Vita3K            (Emulador -- iteração rápida)",
     },
     "build_deploy.target_psvita": {
         "es": "PS Vita Física    (Consola real vía FTP)",
@@ -157,76 +150,6 @@ STRINGS = {
         "en": "[*] Running: {cmd}",
         "pt": "[*] Executando: {cmd}",
     },
-    "build_deploy.deploy_vita3k_title": {
-        "es": "¿Cómo desplegar en Vita3K?",
-        "en": "How do you want to deploy to Vita3K?",
-        "pt": "Como implantar no Vita3K?",
-    },
-    "build_deploy.deploy_vita3k_opt1": {
-        "es": "Hot-swap eboot.bin + relanzar Vita3K (rápido -- recomendado)",
-        "en": "Hot-swap eboot.bin + relaunch Vita3K (fast -- recommended)",
-        "pt": "Hot-swap do eboot.bin + relançar Vita3K (rápido -- recomendado)",
-    },
-    "build_deploy.deploy_vita3k_opt2": {
-        "es": "Instalar VPK completo y lanzar",
-        "en": "Install full VPK and launch",
-        "pt": "Instalar o VPK completo e iniciar",
-    },
-    "build_deploy.deploy_vita3k_opt3": {
-        "es": "Solo copiar eboot.bin (sin abrir el emulador)",
-        "en": "Just copy eboot.bin (without opening the emulator)",
-        "pt": "Apenas copiar o eboot.bin (sem abrir o emulador)",
-    },
-    "build_deploy.deploy_vita3k_opt4": {
-        "es": "Omitir despliegue",
-        "en": "Skip deployment",
-        "pt": "Pular implantação",
-    },
-    "build_deploy.eboot_not_found": {
-        "es": "[-] No se encontró {eboot}.",
-        "en": "[-] Couldn't find {eboot}.",
-        "pt": "[-] Não foi encontrado {eboot}.",
-    },
-    "build_deploy.eboot_deployed_relaunched": {
-        "es": "[+] eboot.bin desplegado en {vita3k_fs} y Vita3K relanzado.",
-        "en": "[+] eboot.bin deployed to {vita3k_fs} and Vita3K relaunched.",
-        "pt": "[+] eboot.bin implantado em {vita3k_fs} e Vita3K relançado.",
-    },
-    "build_deploy.confirm_double_click": {
-        "es": "¿Hacer doble clic automático en el ícono del juego (Quartz)?",
-        "en": "Auto double-click the game icon (Quartz)?",
-        "pt": "Fazer duplo clique automático no ícone do jogo (Quartz)?",
-    },
-    "build_deploy.double_click_done": {
-        "es": "[+] Doble clic realizado.",
-        "en": "[+] Double-click done.",
-        "pt": "[+] Duplo clique realizado.",
-    },
-    "build_deploy.live_log_tip": {
-        "es": "Log en vivo: tail -f \"{log_path}\"",
-        "en": "Live log: tail -f \"{log_path}\"",
-        "pt": "Log ao vivo: tail -f \"{log_path}\"",
-    },
-    "build_deploy.vita3k_installing_vpk": {
-        "es": "[+] Vita3K instalando y lanzando el VPK.",
-        "en": "[+] Vita3K installing and launching the VPK.",
-        "pt": "[+] Vita3K instalando e iniciando o VPK.",
-    },
-    "build_deploy.no_vpk_to_install": {
-        "es": "[-] No hay VPK para instalar.",
-        "en": "[-] No VPK available to install.",
-        "pt": "[-] Não há VPK para instalar.",
-    },
-    "build_deploy.eboot_copied": {
-        "es": "[+] eboot.bin copiado a {vita3k_fs}",
-        "en": "[+] eboot.bin copied to {vita3k_fs}",
-        "pt": "[+] eboot.bin copiado para {vita3k_fs}",
-    },
-    "build_deploy.vita3k_deploy_skipped": {
-        "es": "[*] Despliegue en Vita3K omitido.",
-        "en": "[*] Vita3K deployment skipped.",
-        "pt": "[*] Implantação no Vita3K ignorada.",
-    },
     "build_deploy.deploy_psvita_title": {
         "es": "¿Cómo desplegar a la PS Vita física (FTP)?",
         "en": "How do you want to deploy to the physical PS Vita (FTP)?",
@@ -278,9 +201,9 @@ STRINGS = {
         "pt": "[!] O build terminou, mas nenhum .vpk foi encontrado em {build_dir}/ -- verifique VITA_VPKNAME no CMakeLists.txt.",
     },
     "build_deploy.deploy_later_tip": {
-        "es": "Tip: para desplegar más tarde usá las opciones del menú principal 'Desplegar en Vita3K' / 'Subir a PS Vita'.",
-        "en": "Tip: to deploy later, use the main menu options 'Deploy to Vita3K' / 'Upload to PS Vita'.",
-        "pt": "Dica: para implantar depois, use as opções do menu principal 'Implantar no Vita3K' / 'Enviar para o PS Vita'.",
+        "es": "Tip: para desplegar más tarde usá las opciones del menú principal 'Subir a PS Vita'.",
+        "en": "Tip: to deploy later, use the main menu options 'Upload to PS Vita'.",
+        "pt": "Dica: para implantar depois, use as opções do menu principal 'Enviar para o PS Vita'.",
     },
 }
 i18n.register(STRINGS)
@@ -333,15 +256,18 @@ def _flag_comment(build_sh_path, flag):
 def _choose_target():
     """!
     @brief Prompt the user to pick the execution target.
-    @return `"vita3k"`, `"psvita"`, `"local"`, or `None` if cancelled/invalid input.
+    @return `"psvita"`, `"local"`, or `None` if cancelled/invalid input.
+    @note Vita3K used to be an option here; it was removed after confirming
+          (with Prince of Persia Classic) that the emulator's limitations
+          make it unusable for this class of port -- see
+          `docs/dev-notes/build_deploy.md`.
     """
     print(f"{C.BOLD}{t('build_deploy.choose_target_title')}{C.RESET}")
-    print(f"  {C.GREEN}1){C.RESET} {t('build_deploy.target_vita3k')}")
-    print(f"  {C.GREEN}2){C.RESET} {t('build_deploy.target_psvita')}")
-    print(f"  {C.GREEN}3){C.RESET} {t('build_deploy.target_local')}")
+    print(f"  {C.GREEN}1){C.RESET} {t('build_deploy.target_psvita')}")
+    print(f"  {C.GREEN}2){C.RESET} {t('build_deploy.target_local')}")
     print(f"  {C.RED}q){C.RESET} {t('build_deploy.cancel')}")
     choice = input(t("build_deploy.target_prompt")).strip() or "1"
-    return {"1": "vita3k", "2": "psvita", "3": "local"}.get(choice)
+    return {"1": "psvita", "2": "local"}.get(choice)
 
 
 def _choose_preset(build_sh_path):
@@ -643,75 +569,6 @@ def _find_output_vpk(project_dir, build_dir, project_name, preset):
     return candidates[0]
 
 
-def _deploy_vita3k(project_cfg, global_cfg, vpk_path):
-    """!
-    @brief Interactive menu to deploy a build to the Vita3K emulator.
-    @details Offers: hot-swap `eboot.bin` + relaunch Vita3K, install the full
-             `.vpk` and launch, copy only `eboot.bin` without launching, or skip.
-    @param project_cfg Per-project config dict (must include `_project_dir`,
-                        `titleid`, `game_name`, and optionally `build_dir`).
-    @param global_cfg Global config dict (Vita3K app path, filesystem dir, logs dir).
-    @param vpk_path Path to the built `.vpk`, or `None` if not found.
-    """
-    project_dir = Path(project_cfg["_project_dir"])
-    titleid = project_cfg["titleid"]
-    build_dir = project_dir / project_cfg.get("build_dir", "build")
-    eboot = build_dir / "eboot.bin"
-
-    print(f"\n{C.BOLD}{t('build_deploy.deploy_vita3k_title')}{C.RESET}")
-    print(f"  {C.GREEN}1){C.RESET} {t('build_deploy.deploy_vita3k_opt1')}")
-    print(f"  {C.GREEN}2){C.RESET} {t('build_deploy.deploy_vita3k_opt2')}")
-    print(f"  {C.GREEN}3){C.RESET} {t('build_deploy.deploy_vita3k_opt3')}")
-    print(f"  {C.GREEN}4){C.RESET} {t('build_deploy.deploy_vita3k_opt4')}")
-    choice = input(t("build_deploy.option_prompt")).strip() or "1"
-
-    vita3k_fs = Path(global_cfg.get("vita3k_fs_dir", "")) / titleid
-    vita3k_app = global_cfg.get("vita3k_app", "")
-
-    if choice == "1":
-        if not eboot.exists():
-            print(f"{C.RED}{t('build_deploy.eboot_not_found', eboot=eboot)}{C.RESET}")
-            return
-        vita3k_fs.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(eboot, vita3k_fs / "eboot.bin")
-        font = project_dir / "extras" / "fonts" / "DejaVuSans.ttf"
-        if font.exists():
-            shutil.copy2(font, vita3k_fs / "DejaVuSans.ttf")
-        subprocess.run(["pkill", "-9", "-x", "Vita3K"], capture_output=True)
-        time.sleep(1)
-        subprocess.run(["open", "-a", "Vita3K"])
-        print(f"{C.GREEN}{t('build_deploy.eboot_deployed_relaunched', vita3k_fs=vita3k_fs)}{C.RESET}")
-
-        if tui.confirm(t("build_deploy.confirm_double_click")):
-            from . import automation_mac
-            time.sleep(3)
-            automation_mac.bring_to_front("Vita3K")
-            time.sleep(1)
-            if automation_mac.double_click_first_game_row():
-                print(f"{C.GREEN}{t('build_deploy.double_click_done')}{C.RESET}")
-        log_path = Path(global_cfg.get("vita3k_logs_dir", "")) / f"{titleid} - [{project_cfg['game_name']}].log"
-        print(f"{C.DIM}{t('build_deploy.live_log_tip', log_path=log_path)}{C.RESET}")
-    elif choice == "2":
-        if not (vpk_path and vpk_path.exists()):
-            print(f"{C.RED}{t('build_deploy.no_vpk_to_install')}{C.RESET}")
-            return
-        if vita3k_app and os.access(vita3k_app, os.X_OK):
-            subprocess.Popen([vita3k_app, "-B", "OpenGL", str(vpk_path)],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"{C.GREEN}{t('build_deploy.vita3k_installing_vpk')}{C.RESET}")
-        else:
-            subprocess.run(["open", "-a", "Vita3K", str(vpk_path)])
-    elif choice == "3":
-        if not eboot.exists():
-            print(f"{C.RED}{t('build_deploy.eboot_not_found', eboot=eboot)}{C.RESET}")
-            return
-        vita3k_fs.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(eboot, vita3k_fs / "eboot.bin")
-        print(f"{C.GREEN}{t('build_deploy.eboot_copied', vita3k_fs=vita3k_fs)}{C.RESET}")
-    else:
-        print(t("build_deploy.vita3k_deploy_skipped"))
-
-
 def _deploy_psvita(project_cfg, global_cfg, vpk_path):
     """!
     @brief Interactive menu to deploy a build to a physical PS Vita over FTP.
@@ -771,23 +628,7 @@ def build_and_deploy_wizard(project_cfg, global_cfg):
     else:
         print(f"{C.YELLOW}{t('build_deploy.build_no_vpk_found', build_dir=project_cfg.get('build_dir', 'build'))}{C.RESET}")
 
-    if target == "vita3k":
-        _deploy_vita3k(project_cfg, global_cfg, vpk_path)
-    elif target == "psvita":
+    if target == "psvita":
         _deploy_psvita(project_cfg, global_cfg, vpk_path)
     else:
         print(f"\n{C.DIM}{t('build_deploy.deploy_later_tip')}{C.RESET}")
-
-
-def deploy_only_vita3k(project_cfg, global_cfg):
-    """!
-    @brief Redeploy the last already-built output to Vita3K, without rebuilding.
-    @details Equivalent to running the wizard and picking "copy/relaunch" when
-             a fresh `eboot.bin` already exists from a previous build.
-    @param project_cfg Per-project config dict.
-    @param global_cfg Global config dict.
-    """
-    project_dir = Path(project_cfg["_project_dir"])
-    vpk_path = _find_output_vpk(project_dir, project_cfg.get("build_dir", "build"),
-                                 project_cfg["project_name"], None)
-    _deploy_vita3k(project_cfg, global_cfg, vpk_path)
