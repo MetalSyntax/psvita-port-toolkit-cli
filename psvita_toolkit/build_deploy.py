@@ -7,8 +7,10 @@
 @details
 Build presets are not hardcoded per game: the 4 universal ones (Debug,
 Release, RelWithDebInfo, MinSizeRel) are always offered, and additional
-project-specific flags are auto-discovered by scanning the active project's
-`build.sh` for `"$1" = "--xxx"` conditions.
+project-specific flags are auto-discovered two ways: by scanning the active
+project's `build.sh` for `"$1" = "--xxx"` conditions, and (for the
+`build.sh`-less fallback path) by scanning its `CMakeLists.txt` for standard
+`option(NAME "description" ON|OFF)` declarations.
 
 See `docs/dev-notes/build_deploy.md` for the rationale behind this
 auto-discovery design (vs. hardcoding engine-specific flags) and the
@@ -133,6 +135,16 @@ STRINGS = {
         "es": "[-] cmake falló al configurar -- revisar el output de arriba.",
         "en": "[-] cmake failed to configure -- check the output above.",
         "pt": "[-] O cmake falhou ao configurar -- verifique a saída acima.",
+    },
+    "build_deploy.cmake_options_title": {
+        "es": "[*] Opciones de CMake detectadas en CMakeLists.txt (Enter = usar el valor por defecto):",
+        "en": "[*] CMake options detected in CMakeLists.txt (Enter = use the default):",
+        "pt": "[*] Opções de CMake detectadas no CMakeLists.txt (Enter = usar o padrão):",
+    },
+    "build_deploy.cmake_option_prompt": {
+        "es": "  {name} -- {desc} [{default}]: ",
+        "en": "  {name} -- {desc} [{default}]: ",
+        "pt": "  {name} -- {desc} [{default}]: ",
     },
     "build_deploy.running_command": {
         "es": "[*] Ejecutando: {cmd}",
@@ -377,6 +389,50 @@ _CMAKE_BUILD_TYPES = {
 }
 
 
+_CMAKE_OPTION_RE = re.compile(r'^\s*option\(\s*(\w+)\s+"([^"]*)"\s+(ON|OFF)\s*\)', re.MULTILINE)
+
+
+def _discover_cmake_options(project_dir):
+    """!
+    @brief Scan a project's root `CMakeLists.txt` for standard CMake
+           `option(NAME "description" ON|OFF)` declarations.
+    @param project_dir Path to the project directory.
+    @return List of `(name, description, default_bool)` tuples, in file order;
+            `[]` if there's no `CMakeLists.txt` or it declares no options.
+    @note This is a generic, project-agnostic mechanism -- any project using
+          the standard CMake `option()` idiom gets its toggles surfaced here
+          automatically, with no per-project/per-engine special-casing. See
+          `docs/dev-notes/build_deploy.md`.
+    """
+    cmake_path = project_dir / "CMakeLists.txt"
+    if not cmake_path.exists():
+        return []
+    text = cmake_path.read_text(errors="ignore")
+    return [(name, desc, default == "ON") for name, desc, default in _CMAKE_OPTION_RE.findall(text)]
+
+
+def _prompt_cmake_options(project_dir):
+    """!
+    @brief Interactively let the user toggle each CMake option discovered by
+           `_discover_cmake_options()`, one at a time (Enter keeps the
+           CMakeLists.txt-declared default).
+    @param project_dir Path to the project directory.
+    @return List of `-D<NAME>=ON`/`-D<NAME>=OFF` strings, one per discovered
+            option, ready to append to a `cmake` invocation.
+    """
+    options = _discover_cmake_options(project_dir)
+    if not options:
+        return []
+    print(f"\n{C.BOLD}{t('build_deploy.cmake_options_title')}{C.RESET}")
+    flags = []
+    for name, desc, default in options:
+        default_label = "ON" if default else "OFF"
+        raw = input(t("build_deploy.cmake_option_prompt", name=name, desc=desc, default=default_label)).strip().upper()
+        value = raw if raw in ("ON", "OFF") else default_label
+        flags.append(f"-D{name}={value}")
+    return flags
+
+
 def _vitasdk_env(global_cfg):
     """!
     @brief Build a subprocess environment with `VITASDK` and `$VITASDK/bin`
@@ -429,6 +485,7 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
     if preset and preset != "custom":
         cmake_args.append(f"-DCMAKE_BUILD_TYPE={_CMAKE_BUILD_TYPES.get(preset, 'Release')}")
     cmake_args.extend(extra_args or [])
+    cmake_args.extend(_prompt_cmake_options(project_dir))
     print(f"{t('build_deploy.running_command', cmd=' '.join(cmake_args))}\n")
     r = subprocess.run(cmake_args, cwd=build_path, env=env)
     if r.returncode != 0:

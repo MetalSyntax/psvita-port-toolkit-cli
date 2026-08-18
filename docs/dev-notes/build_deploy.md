@@ -34,6 +34,24 @@ folder. The preset still maps to `-DCMAKE_BUILD_TYPE=...` in this path; project-
 flags (auto-discovered from `build.sh` for boilerplate-based ports) simply don't exist for these
 projects, since there's no `build.sh` to scan.
 
+**Real gap found in practice (Prince of Persia Classic)**: this adopted, `build.sh`-less project
+turned out to have a real `build_and_install.sh` before it was deleted (on the reasonable
+assumption that this toolkit's generic fallback fully replaces it) that passed
+`-DEMULATOR_BUILD=ON/OFF` (toggling hardware-only safety checks like `kubridge` presence, so the
+same binary can run correctly on Vita3K vs. real hardware) and `-DENABLE_VERBOSE_LOG=ON` (without
+which the game writes nothing to its log file at all, not even on a crash) depending on
+interactive prompts. Losing `build.sh` meant losing the only place that knew to pass these.
+
+Rather than hardcode `EMULATOR_BUILD`/`ENABLE_VERBOSE_LOG` (or any other project's specific
+option names) into this generic toolkit, `_discover_cmake_options()` scans the project's own
+`CMakeLists.txt` for the standard CMake `option(NAME "description" ON|OFF)` idiom -- which is
+exactly how this project (and likely others) already declares these toggles -- and
+`_prompt_cmake_options()` surfaces every one it finds as an interactive ON/OFF prompt (Enter
+keeps the CMakeLists.txt-declared default) before running `cmake`. This is fully generic: any
+project using the standard `option()` pattern gets its toggles exposed automatically, with zero
+per-project special-casing, extending the same "auto-discover, don't hardcode" principle already
+used for `build.sh`-based extra flags to the `build.sh`-less fallback path too.
+
 **Real bug hit in practice**: the first version of this fallback ran `cmake`/`make` with the
 toolkit's own inherited environment, unchanged. That's missing exactly what every hand-written
 `build.sh` normally does at its top -- `export VITASDK=...; export PATH="$VITASDK/bin:$PATH"`.
