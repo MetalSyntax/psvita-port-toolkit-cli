@@ -15,13 +15,224 @@ import sys
 from collections import Counter, defaultdict
 
 from .tui import C
+from . import i18n
+from .i18n import t
+
+STRINGS = {
+    "crash_analyzer.stop_reason.no_reason": {
+        "es": "No reason (ejecución normal)",
+        "en": "No reason (normal execution)",
+        "pt": "No reason (execução normal)",
+    },
+    "crash_analyzer.stop_reason.undefined_instruction": {
+        "es": "Undefined instruction exception (instrucción inválida/corrupta)",
+        "en": "Undefined instruction exception (invalid/corrupt instruction)",
+        "pt": "Undefined instruction exception (instrução inválida/corrompida)",
+    },
+    "crash_analyzer.stop_reason.prefetch_abort": {
+        "es": "Prefetch abort exception (fallo al buscar instrucción en memoria)",
+        "en": "Prefetch abort exception (failed to fetch instruction from memory)",
+        "pt": "Prefetch abort exception (falha ao buscar instrução na memória)",
+    },
+    "crash_analyzer.stop_reason.data_abort": {
+        "es": "Data abort exception (fallo de acceso a memoria / puntero nulo o inválido)",
+        "en": "Data abort exception (memory access fault / null or invalid pointer)",
+        "pt": "Data abort exception (falha de acesso à memória / ponteiro nulo ou inválido)",
+    },
+    "crash_analyzer.stop_reason.division_by_zero": {
+        "es": "Division by zero",
+        "en": "Division by zero",
+        "pt": "Divisão por zero",
+    },
+    "crash_analyzer.toolchain_load_failed": {
+        "es": "[-] No se pudo cargar 'vita-parse-core' desde '{dir}': {error}",
+        "en": "[-] Could not load 'vita-parse-core' from '{dir}': {error}",
+        "pt": "[-] Não foi possível carregar 'vita-parse-core' de '{dir}': {error}",
+    },
+    "crash_analyzer.toolchain_load_hint": {
+        "es": "    Clonar vita-parse-core o corregir 'vita_parse_core_dir' en la config global.",
+        "en": "    Clone vita-parse-core or fix 'vita_parse_core_dir' in the global config.",
+        "pt": "    Clone o vita-parse-core ou corrija 'vita_parse_core_dir' na configuração global.",
+    },
+    "crash_analyzer.symbols_extract_failed": {
+        "es": "[!] No se pudieron extraer símbolos de {path}: {error}",
+        "en": "[!] Could not extract symbols from {path}: {error}",
+        "pt": "[!] Não foi possível extrair símbolos de {path}: {error}",
+    },
+    "crash_analyzer.crash_instruction_marker": {
+        "es": "INSTRUCCIÓN DEL CRASH",
+        "en": "CRASH INSTRUCTION",
+        "pt": "INSTRUÇÃO DO CRASH",
+    },
+    "crash_analyzer.disassemble_error": {
+        "es": "Error al desensamblar: {error}",
+        "en": "Error while disassembling: {error}",
+        "pt": "Erro ao desmontar: {error}",
+    },
+    "crash_analyzer.dump_not_found": {
+        "es": "[-] Archivo dump no encontrado: {path}",
+        "en": "[-] Dump file not found: {path}",
+        "pt": "[-] Arquivo de dump não encontrado: {path}",
+    },
+    "crash_analyzer.report_title": {
+        "es": "           PS VITA CRASH DUMP ANALYSIS REPORT (vita-parse-core)",
+        "en": "           PS VITA CRASH DUMP ANALYSIS REPORT (vita-parse-core)",
+        "pt": "           PS VITA CRASH DUMP ANALYSIS REPORT (vita-parse-core)",
+    },
+    "crash_analyzer.header_core_dump": {
+        "es": " Core Dump: {path}",
+        "en": " Core Dump: {path}",
+        "pt": " Core Dump: {path}",
+    },
+    "crash_analyzer.header_elf": {
+        "es": " ELF (Vita): {path}",
+        "en": " ELF (Vita): {path}",
+        "pt": " ELF (Vita): {path}",
+    },
+    "crash_analyzer.header_so": {
+        "es": " SO (Android): {path}",
+        "en": " SO (Android): {path}",
+        "pt": " SO (Android): {path}",
+    },
+    "crash_analyzer.not_detected": {
+        "es": "no detectado",
+        "en": "not detected",
+        "pt": "não detectado",
+    },
+    "crash_analyzer.so_base_auto": {
+        "es": "[+] Base de memoria del .so AUTO-DETECTADA en: 0x{addr:x}",
+        "en": "[+] .so memory base AUTO-DETECTED at: 0x{addr:x}",
+        "pt": "[+] Base de memória do .so AUTO-DETECTADA em: 0x{addr:x}",
+    },
+    "crash_analyzer.so_base_fallback": {
+        "es": "[*] Base de memoria del .so, fallback: 0x{addr:x}",
+        "en": "[*] .so memory base, fallback: 0x{addr:x}",
+        "pt": "[*] Base de memória do .so, fallback: 0x{addr:x}",
+    },
+    "crash_analyzer.thread_crashed": {
+        "es": "\n[!] HILO EN CRASH: '{name}' (ID: 0x{uid:x})",
+        "en": "\n[!] CRASHED THREAD: '{name}' (ID: 0x{uid:x})",
+        "pt": "\n[!] THREAD EM CRASH: '{name}' (ID: 0x{uid:x})",
+    },
+    "crash_analyzer.stop_reason_line": {
+        "es": "    Razón de parada: 0x{code:x} ({reason})",
+        "en": "    Stop reason: 0x{code:x} ({reason})",
+        "pt": "    Motivo da parada: 0x{code:x} ({reason})",
+    },
+    "crash_analyzer.section_cpu_registers": {
+        "es": "\n--- REGISTROS CPU ---",
+        "en": "\n--- CPU REGISTERS ---",
+        "pt": "\n--- REGISTRADORES DA CPU ---",
+    },
+    "crash_analyzer.section_root_cause": {
+        "es": "                   DIAGNÓSTICO AUTOMÁTICO DE CAUSA RAÍZ",
+        "en": "                   AUTOMATIC ROOT CAUSE DIAGNOSIS",
+        "pt": "                DIAGNÓSTICO AUTOMÁTICO DA CAUSA RAIZ",
+    },
+    "crash_analyzer.root_cause_data_abort": {
+        "es": " [*] Data Abort (acceso a memoria inválida).",
+        "en": " [*] Data Abort (invalid memory access).",
+        "pt": " [*] Data Abort (acesso inválido à memória).",
+    },
+    "crash_analyzer.root_cause_undefined_instruction": {
+        "es": " [*] Undefined Instruction (código corrupto/inválido).",
+        "en": " [*] Undefined Instruction (corrupt/invalid code).",
+        "pt": " [*] Undefined Instruction (código corrompido/inválido).",
+    },
+    "crash_analyzer.root_cause_division_by_zero": {
+        "es": " [*] Division by zero.",
+        "en": " [*] Division by zero.",
+        "pt": " [*] Divisão por zero.",
+    },
+    "crash_analyzer.crash_location": {
+        "es": " [*] Ubicación del crash: PC = {pc}",
+        "en": " [*] Crash location: PC = {pc}",
+        "pt": " [*] Localização do crash: PC = {pc}",
+    },
+    "crash_analyzer.crash_instruction": {
+        "es": " [*] Instrucción causante: {line}",
+        "en": " [*] Faulting instruction: {line}",
+        "pt": " [*] Instrução causadora: {line}",
+    },
+    "crash_analyzer.probable_cause_null_ptr": {
+        "es": " [*] CAUSA PROBABLE: R{reg} es 0x00000000 (puntero NULO).",
+        "en": " [*] PROBABLE CAUSE: R{reg} is 0x00000000 (NULL pointer).",
+        "pt": " [*] CAUSA PROVÁVEL: R{reg} é 0x00000000 (ponteiro NULO).",
+    },
+    "crash_analyzer.section_disasm_pc": {
+        "es": "\n--- DESENSAMBLADO EN PC ---",
+        "en": "\n--- DISASSEMBLY AT PC ---",
+        "pt": "\n--- DESMONTAGEM NO PC ---",
+    },
+    "crash_analyzer.section_stack_content": {
+        "es": "\n--- CONTENIDO DE LA PILA (BACKTRACE) ---",
+        "en": "\n--- STACK CONTENTS (BACKTRACE) ---",
+        "pt": "\n--- CONTEÚDO DA PILHA (BACKTRACE) ---",
+    },
+    "crash_analyzer.stack_frame": {
+        "es": "Pila 0x{addr:x}: {resolved}",
+        "en": "Stack 0x{addr:x}: {resolved}",
+        "pt": "Pilha 0x{addr:x}: {resolved}",
+    },
+    "crash_analyzer.section_call_chain": {
+        "es": "\n--- SECUENCIA DE LLAMADAS RECONSTRUIDA ---",
+        "en": "\n--- RECONSTRUCTED CALL CHAIN ---",
+        "pt": "\n--- SEQUÊNCIA DE CHAMADAS RECONSTRUÍDA ---",
+    },
+    "crash_analyzer.section_modules_loaded": {
+        "es": "                       MÓDULOS CARGADOS EN LA VITA",
+        "en": "                       MODULES LOADED ON THE VITA",
+        "pt": "                    MÓDULOS CARREGADOS NA VITA",
+    },
+    "crash_analyzer.module_segment": {
+        "es": "Seg{num}: 0x{start:x} (tamaño 0x{size:x})",
+        "en": "Seg{num}: 0x{start:x} (size 0x{size:x})",
+        "pt": "Seg{num}: 0x{start:x} (tamanho 0x{size:x})",
+    },
+    "crash_analyzer.report_saved": {
+        "es": "[+] Reporte guardado en: {path}",
+        "en": "[+] Report saved to: {path}",
+        "pt": "[+] Relatório salvo em: {path}",
+    },
+    "crash_analyzer.report_save_failed": {
+        "es": "[-] No se pudo guardar el reporte: {error}",
+        "en": "[-] Could not save the report: {error}",
+        "pt": "[-] Não foi possível salvar o relatório: {error}",
+    },
+    "crash_analyzer.menu_no_dumps": {
+        "es": "[-] No hay ningún crash dump descargado todavía en logs/.",
+        "en": "[-] No crash dump has been downloaded yet in logs/.",
+        "pt": "[-] Ainda não há nenhum crash dump baixado em logs/.",
+    },
+    "crash_analyzer.menu_no_dumps_hint": {
+        "es": "    Usá 'Descargar logs / crash dumps' primero.",
+        "en": "    Use 'Download logs / crash dumps' first.",
+        "pt": "    Use 'Baixar logs / crash dumps' primeiro.",
+    },
+    "crash_analyzer.menu_available_dumps": {
+        "es": "Crash dumps disponibles localmente:",
+        "en": "Crash dumps available locally:",
+        "pt": "Crash dumps disponíveis localmente:",
+    },
+    "crash_analyzer.menu_choose_prompt": {
+        "es": "Elegí uno [1] (Enter = el más reciente): ",
+        "en": "Choose one [1] (Enter = most recent): ",
+        "pt": "Escolha um [1] (Enter = mais recente): ",
+    },
+    "crash_analyzer.menu_invalid_choice": {
+        "es": "[-] Opción inválida.",
+        "en": "[-] Invalid option.",
+        "pt": "[-] Opção inválida.",
+    },
+}
+i18n.register(STRINGS)
 
 STOP_REASONS = defaultdict(str, {
-    0: "No reason (ejecución normal)",
-    0x30002: "Undefined instruction exception (instrucción inválida/corrupta)",
-    0x30003: "Prefetch abort exception (fallo al buscar instrucción en memoria)",
-    0x30004: "Data abort exception (fallo de acceso a memoria / puntero nulo o inválido)",
-    0x60080: "Division by zero",
+    0: "crash_analyzer.stop_reason.no_reason",
+    0x30002: "crash_analyzer.stop_reason.undefined_instruction",
+    0x30003: "crash_analyzer.stop_reason.prefetch_abort",
+    0x30004: "crash_analyzer.stop_reason.data_abort",
+    0x60080: "crash_analyzer.stop_reason.division_by_zero",
 })
 
 
@@ -39,8 +250,8 @@ def _ensure_toolchain(global_cfg):
         from elf import ElfParser  # noqa: F401
         from util import u32  # noqa: F401
     except ImportError as e:
-        print(f"{C.RED}[-] No se pudo cargar 'vita-parse-core' desde '{vpc_dir}': {e}{C.RESET}")
-        print(f"{C.DIM}    Clonar vita-parse-core o corregir 'vita_parse_core_dir' en la config global.{C.RESET}")
+        print(f"{C.RED}{t('crash_analyzer.toolchain_load_failed', dir=vpc_dir, error=e)}{C.RESET}")
+        print(f"{C.DIM}{t('crash_analyzer.toolchain_load_hint')}{C.RESET}")
         return None
     return True
 
@@ -82,7 +293,7 @@ class SymbolTable:
                         continue
             self.symbols.sort(key=lambda x: x[0])
         except Exception as e:
-            print(f"{C.YELLOW}[!] No se pudieron extraer símbolos de {self.so_path}: {e}{C.RESET}")
+            print(f"{C.YELLOW}{t('crash_analyzer.symbols_extract_failed', path=self.so_path, error=e)}{C.RESET}")
 
     def lookup(self, offset):
         for start, end, demangled, _ in self.symbols:
@@ -132,10 +343,10 @@ def _disassemble_around(bin_path, offset, is_thumb=True):
                 continue
             if in_text and line.strip():
                 marker = f"{addr:x}:" in line.lower() or f"{addr:08x}:" in line.lower()
-                lines.append(f"  ==> {line:<52} <== [INSTRUCCIÓN DEL CRASH]" if marker else f"      {line}")
+                lines.append(f"  ==> {line:<52} <== [{t('crash_analyzer.crash_instruction_marker')}]" if marker else f"      {line}")
         return lines
     except Exception as e:
-        return [f"Error al desensamblar: {e}"]
+        return [t("crash_analyzer.disassemble_error", error=e)]
 
 
 def _auto_find_files(project_dir, build_dir):
@@ -168,7 +379,7 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     so_path = so_path or auto_so
 
     if not os.path.exists(dump_path):
-        print(f"{C.RED}[-] Archivo dump no encontrado: {dump_path}{C.RESET}")
+        print(f"{C.RED}{t('crash_analyzer.dump_not_found', path=dump_path)}{C.RESET}")
         return
 
     report = []
@@ -178,11 +389,11 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
         report.append(msg)
 
     log("=" * 80)
-    log("           PS VITA CRASH DUMP ANALYSIS REPORT (vita-parse-core)")
+    log(t("crash_analyzer.report_title"))
     log("=" * 80)
-    log(f" Core Dump: {dump_path}")
-    log(f" ELF (Vita): {elf_path or 'no detectado'}")
-    log(f" SO (Android): {so_path or 'no detectado'}")
+    log(t("crash_analyzer.header_core_dump", path=dump_path))
+    log(t("crash_analyzer.header_elf", path=elf_path or t("crash_analyzer.not_detected")))
+    log(t("crash_analyzer.header_so", path=so_path or t("crash_analyzer.not_detected")))
     log("=" * 80)
 
     core = CoreParser(dump_path)
@@ -192,10 +403,10 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     crashed = [t for t in core.threads if t.stop_reason != 0] or core.threads[:1]
 
     all_addrs = []
-    for t in crashed:
-        all_addrs.append(t.pc)
-        all_addrs.append(t.regs.gpr[14])
-        sp = t.regs.gpr[13]
+    for thr in crashed:
+        all_addrs.append(thr.pc)
+        all_addrs.append(thr.regs.gpr[14])
+        sp = thr.regs.gpr[13]
         for x in range(-4, stack_depth):
             d = core.read_vaddr(sp + 4 * x, 4)
             if d:
@@ -204,10 +415,10 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     if not so_base and so_syms:
         so_base = _auto_detect_so_base(all_addrs, so_syms)
         if so_base:
-            log(f"[+] Base de memoria del .so AUTO-DETECTADA en: 0x{so_base:x}")
+            log(t("crash_analyzer.so_base_auto", addr=so_base))
         else:
             so_base = 0x98000000
-            log(f"[*] Base de memoria del .so, fallback: 0x{so_base:x}")
+            log(t("crash_analyzer.so_base_fallback", addr=so_base))
 
     def resolve(addr):
         notation = core.get_address_notation("", addr)
@@ -229,13 +440,13 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
         return f"0x{addr:x}"
 
     for thread in crashed:
-        log(f"\n[!] HILO EN CRASH: '{thread.name}' (ID: 0x{thread.uid:x})")
-        log(f"    Razón de parada: 0x{thread.stop_reason:x} ({STOP_REASONS[thread.stop_reason]})")
+        log(t("crash_analyzer.thread_crashed", name=thread.name, uid=thread.uid))
+        log(t("crash_analyzer.stop_reason_line", code=thread.stop_reason, reason=t(STOP_REASONS[thread.stop_reason])))
         lr = thread.regs.gpr[14]
         log(f"    PC: {resolve(thread.pc)}")
         log(f"    LR: {resolve(lr)}")
 
-        log("\n--- REGISTROS CPU ---")
+        log(t("crash_analyzer.section_cpu_registers"))
         for i in range(13):
             v = thread.regs.gpr[i]
             log(f"    R{i:<2}: 0x{v:08x}  {resolve(v) if v > 0x10000 else ''}")
@@ -243,26 +454,27 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
         log(f"    SP : 0x{sp:08x}")
 
         log("\n" + "=" * 80)
-        log("                   DIAGNÓSTICO AUTOMÁTICO DE CAUSA RAÍZ")
+        log(t("crash_analyzer.section_root_cause"))
         log("=" * 80)
         if thread.stop_reason == 0x30004:
-            log(" [*] Data Abort (acceso a memoria inválida).")
+            log(t("crash_analyzer.root_cause_data_abort"))
         elif thread.stop_reason == 0x30002:
-            log(" [*] Undefined Instruction (código corrupto/inválido).")
+            log(t("crash_analyzer.root_cause_undefined_instruction"))
         elif thread.stop_reason == 0x60080:
-            log(" [*] Division by zero.")
-        log(f" [*] Ubicación del crash: PC = {resolve(thread.pc)}")
+            log(t("crash_analyzer.root_cause_division_by_zero"))
+        log(t("crash_analyzer.crash_location", pc=resolve(thread.pc)))
 
         if so_base and 0x80000000 <= thread.pc <= 0x9fffffff and so_path:
             pc_off = thread.pc - so_base
+            crash_marker = f"[{t('crash_analyzer.crash_instruction_marker')}]"
             for line in _disassemble_around(so_path, pc_off, is_thumb=True):
-                if "[INSTRUCCIÓN DEL CRASH]" in line:
-                    log(f" [*] Instrucción causante: {line.strip()}")
+                if crash_marker in line:
+                    log(t("crash_analyzer.crash_instruction", line=line.strip()))
                     for i in range(13):
                         if f"r{i}" in line.lower() and thread.regs.gpr[i] == 0:
-                            log(f" [*] CAUSA PROBABLE: R{i} es 0x00000000 (puntero NULO).")
+                            log(t("crash_analyzer.probable_cause_null_ptr", reg=i))
 
-        log("\n--- DESENSAMBLADO EN PC ---")
+        log(t("crash_analyzer.section_disasm_pc"))
         if so_base and 0x80000000 <= thread.pc <= 0x9fffffff and so_path:
             for line in _disassemble_around(so_path, thread.pc - so_base, is_thumb=True):
                 log(line)
@@ -271,7 +483,7 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
             if notation.is_located():
                 elf.disas_around_addr(notation._VitaAddress__offset)
 
-        log("\n--- CONTENIDO DE LA PILA (BACKTRACE) ---")
+        log(t("crash_analyzer.section_stack_content"))
         chain = [f"PC: {resolve(thread.pc)}", f"LR: {resolve(lr)}"]
         for x in range(-4, stack_depth):
             addr = sp + 4 * x
@@ -280,11 +492,11 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
                 val = u32(d, 0)
                 resolved = resolve(val)
                 if ".so" in resolved or ".elf" in resolved or exe_name in resolved:
-                    chain.append(f"Stack 0x{addr:x}: {resolved}")
+                    chain.append(t("crash_analyzer.stack_frame", addr=addr, resolved=resolved))
                 prefix = "SP => " if addr == sp else "      "
                 log(f"    {prefix}0x{addr:08x}: 0x{val:08x}  -> {resolved}")
 
-        log("\n--- SECUENCIA DE LLAMADAS RECONSTRUIDA ---")
+        log(t("crash_analyzer.section_call_chain"))
         seen = set()
         for frame in chain:
             if frame not in seen:
@@ -292,33 +504,33 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
                 seen.add(frame)
 
     log("\n" + "=" * 80)
-    log("                       MÓDULOS CARGADOS EN LA VITA")
+    log(t("crash_analyzer.section_modules_loaded"))
     log("=" * 80)
     for mod in core.modules:
-        segs = ", ".join(f"Seg{s.num}: 0x{s.start:x} (size 0x{s.size:x})" for s in mod.segments)
+        segs = ", ".join(t("crash_analyzer.module_segment", num=s.num, start=s.start, size=s.size) for s in mod.segments)
         log(f" - {mod.name:<24} | {segs}")
 
     analysis_file = f"{dump_path}.analysis.txt"
     try:
         with open(analysis_file, "w", encoding="utf-8") as f:
             f.write("\n".join(report))
-        print(f"\n{C.GREEN}[+] Reporte guardado en: {analysis_file}{C.RESET}")
+        print(f"\n{C.GREEN}{t('crash_analyzer.report_saved', path=analysis_file)}{C.RESET}")
     except OSError as e:
-        print(f"{C.RED}[-] No se pudo guardar el reporte: {e}{C.RESET}")
+        print(f"{C.RED}{t('crash_analyzer.report_save_failed', error=e)}{C.RESET}")
 
 
 def analyze_menu(project_cfg, global_cfg):
     from . import ftp_ops
     dumps = ftp_ops.list_local_history(project_cfg, "dumps")
     if not dumps:
-        print(f"{C.YELLOW}[-] No hay ningún crash dump descargado todavía en logs/.{C.RESET}")
-        print(f"{C.DIM}    Usá 'Descargar logs / crash dumps' primero.{C.RESET}")
+        print(f"{C.YELLOW}{t('crash_analyzer.menu_no_dumps')}{C.RESET}")
+        print(f"{C.DIM}{t('crash_analyzer.menu_no_dumps_hint')}{C.RESET}")
         return
-    print(f"{C.BOLD}Crash dumps disponibles localmente:{C.RESET}")
+    print(f"{C.BOLD}{t('crash_analyzer.menu_available_dumps')}{C.RESET}")
     for i, p in enumerate(dumps, 1):
         print(f"  {i:2d}. {p.name}")
-    choice = input("Elegí uno [1] (Enter = el más reciente): ").strip() or "1"
+    choice = input(t("crash_analyzer.menu_choose_prompt")).strip() or "1"
     if not choice.isdigit() or not (1 <= int(choice) <= len(dumps)):
-        print(f"{C.RED}[-] Opción inválida.{C.RESET}")
+        print(f"{C.RED}{t('crash_analyzer.menu_invalid_choice')}{C.RESET}")
         return
     analyze(project_cfg, str(dumps[int(choice) - 1]), global_cfg)

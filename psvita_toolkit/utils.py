@@ -12,7 +12,149 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from . import i18n
+from .i18n import t
+
 from .tui import C
+
+STRINGS = {
+    "utils.macos_junk_removed": {
+        "es": "{color_green}[+] {removed} archivo(s) '._*' eliminado(s).{color_reset}",
+        "en": "{color_green}[+] {removed} '._*' file(s) removed.{color_reset}",
+        "pt": "{color_green}[+] {removed} arquivo(s) '._*' removido(s).{color_reset}",
+    },
+    "utils.decompile_jadx_step": {
+        "es": "[1/2] Decompilación Java (jadx)...",
+        "en": "[1/2] Java decompilation (jadx)...",
+        "pt": "[1/2] Decompilação Java (jadx)...",
+    },
+    "utils.decompile_jadx_done": {
+        "es": "{color_green}[+] JADX terminado. Resultados en {apk_out_dir}{color_reset}",
+        "en": "{color_green}[+] JADX finished. Results in {apk_out_dir}{color_reset}",
+        "pt": "{color_green}[+] JADX concluído. Resultados em {apk_out_dir}{color_reset}",
+    },
+    "utils.decompile_apk_not_found": {
+        "es": "{color_yellow}[!] No se encontró el .apk original en {project_dir} -- se omite jadx.{color_reset}",
+        "en": "{color_yellow}[!] Original .apk not found in {project_dir} -- skipping jadx.{color_reset}",
+        "pt": "{color_yellow}[!] Não foi encontrado o .apk original em {project_dir} -- pulando jadx.{color_reset}",
+    },
+    "utils.decompile_jadx_not_installed": {
+        "es": "{color_yellow}[!] jadx no está instalado (brew install jadx) -- se omite.{color_reset}",
+        "en": "{color_yellow}[!] jadx isn't installed (brew install jadx) -- skipping.{color_reset}",
+        "pt": "{color_yellow}[!] jadx não está instalado (brew install jadx) -- pulando.{color_reset}",
+    },
+    "utils.decompile_so_step": {
+        "es": "\n[2/2] Decompilación de .so (Ghidra vía devrvk/so-decompiler)...",
+        "en": "\n[2/2] .so decompilation (Ghidra via devrvk/so-decompiler)...",
+        "pt": "\n[2/2] Decompilação de .so (Ghidra via devrvk/so-decompiler)...",
+    },
+    "utils.decompile_lib_dir_missing": {
+        "es": "{color_yellow}[!] No se encontró {lib_dir} -- ¿ya extrajiste el APK? (se hace al crear el port){color_reset}",
+        "en": "{color_yellow}[!] {lib_dir} not found -- did you extract the APK already? (this happens when creating the port){color_reset}",
+        "pt": "{color_yellow}[!] {lib_dir} não encontrado -- você já extraiu o APK? (isso acontece ao criar o port){color_reset}",
+    },
+    "utils.decompile_docker_not_installed": {
+        "es": "{color_yellow}[!] docker no está instalado -- se omite.{color_reset}",
+        "en": "{color_yellow}[!] docker isn't installed -- skipping.{color_reset}",
+        "pt": "{color_yellow}[!] docker não está instalado -- pulando.{color_reset}",
+    },
+    "utils.decompile_so_running": {
+        "es": "[*] Decompilando {name} ({abi})...",
+        "en": "[*] Decompiling {name} ({abi})...",
+        "pt": "[*] Decompilando {name} ({abi})...",
+    },
+    "utils.decompile_so_done": {
+        "es": "[+] Listo: {path}",
+        "en": "[+] Done: {path}",
+        "pt": "[+] Concluído: {path}",
+    },
+    "utils.decompile_so_failed": {
+        "es": "[!] Falló {name}",
+        "en": "[!] {name} failed",
+        "pt": "[!] Falhou {name}",
+    },
+    "utils.tests_no_script": {
+        "es": "{color_yellow}[-] Este proyecto no tiene tests/run_tests.sh.{color_reset}",
+        "en": "{color_yellow}[-] This project doesn't have tests/run_tests.sh.{color_reset}",
+        "pt": "{color_yellow}[-] Este projeto não tem tests/run_tests.sh.{color_reset}",
+    },
+    "utils.tests_no_script_hint": {
+        "es": "{color_dim}    Es opcional y específico de cada port -- crealo si necesitás un test suite de host.{color_reset}",
+        "en": "{color_dim}    It's optional and specific to each port -- create it if you need a host test suite.{color_reset}",
+        "pt": "{color_dim}    É opcional e específico de cada port -- crie-o se precisar de uma suíte de testes no host.{color_reset}",
+    },
+    "utils.shaders_no_dump_dir": {
+        "es": "{color_yellow}[-] No existe {dump_dir} -- descargá los shaders volcados primero.{color_reset}",
+        "en": "{color_yellow}[-] {dump_dir} doesn't exist -- download the dumped shaders first.{color_reset}",
+        "pt": "{color_yellow}[-] {dump_dir} não existe -- baixe os shaders extraídos primeiro.{color_reset}",
+    },
+    "utils.shaders_converted": {
+        "es": "  {src} -> {dst}",
+        "en": "  {src} -> {dst}",
+        "pt": "  {src} -> {dst}",
+    },
+    "utils.shaders_cleaned_count": {
+        "es": "{color_green}[+] {count} shader(s) con boilerplate limpio en {out_dir}.{color_reset}",
+        "en": "{color_green}[+] {count} shader(s) with boilerplate cleaned in {out_dir}.{color_reset}",
+        "pt": "{color_green}[+] {count} shader(s) com boilerplate limpo em {out_dir}.{color_reset}",
+    },
+    "utils.shaders_manual_review_warning": {
+        "es": "{color_yellow}[!] Revisar/reescribir a mano cada uno -- esto NO es una traducción GLSL->Cg real.{color_reset}",
+        "en": "{color_yellow}[!] Review/rewrite each one by hand -- this is NOT a real GLSL->Cg translation.{color_reset}",
+        "pt": "{color_yellow}[!] Revise/reescreva cada um manualmente -- isso NÃO é uma tradução GLSL->Cg real.{color_reset}",
+    },
+    "utils.shaders_no_glsl_found": {
+        "es": "{color_yellow}[-] No había .glsl en {dump_dir}.{color_reset}",
+        "en": "{color_yellow}[-] There were no .glsl files in {dump_dir}.{color_reset}",
+        "pt": "{color_yellow}[-] Não havia .glsl em {dump_dir}.{color_reset}",
+    },
+    "utils.docs_missing_deep_translator": {
+        "es": "{color_red}[-] Falta 'deep-translator' -- instalar con: pip install deep-translator{color_reset}",
+        "en": "{color_red}[-] 'deep-translator' is missing -- install it with: pip install deep-translator{color_reset}",
+        "pt": "{color_red}[-] Falta o 'deep-translator' -- instale com: pip install deep-translator{color_reset}",
+    },
+    "utils.docs_no_md_files": {
+        "es": "{color_yellow}[-] No hay archivos .md en la raíz de {project_dir}.{color_reset}",
+        "en": "{color_yellow}[-] There are no .md files in the root of {project_dir}.{color_reset}",
+        "pt": "{color_yellow}[-] Não há arquivos .md na raiz de {project_dir}.{color_reset}",
+    },
+    "utils.docs_translate_error": {
+        "es": "{color_red}[-] Error traduciendo {name}: {error}{color_reset}",
+        "en": "{color_red}[-] Error translating {name}: {error}{color_reset}",
+        "pt": "{color_red}[-] Erro ao traduzir {name}: {error}{color_reset}",
+    },
+    "utils.docs_translated": {
+        "es": "{color_green}[+] {src} -> {dst}{color_reset}",
+        "en": "{color_green}[+] {src} -> {dst}{color_reset}",
+        "pt": "{color_green}[+] {src} -> {dst}{color_reset}",
+    },
+    "utils.symbols_no_so_found": {
+        "es": "{color_red}[-] No se encontró ningún .so (ni en <slug>_extract/lib/ ni en lib/).{color_reset}",
+        "en": "{color_red}[-] No .so found (neither in <slug>_extract/lib/ nor in lib/).{color_reset}",
+        "pt": "{color_red}[-] Nenhum .so encontrado (nem em <slug>_extract/lib/ nem em lib/).{color_reset}",
+    },
+    "utils.symbols_so_header": {
+        "es": "\n{color_bold}--- {so} ---{color_reset}",
+        "en": "\n{color_bold}--- {so} ---{color_reset}",
+        "pt": "\n{color_bold}--- {so} ---{color_reset}",
+    },
+    "utils.symbols_readelf_failed_fallback": {
+        "es": "readelf falló (¿VITASDK en PATH?)",
+        "en": "readelf failed (is VITASDK in PATH?)",
+        "pt": "readelf falhou (o VITASDK está no PATH?)",
+    },
+    "utils.symbols_error_line": {
+        "es": "{color_red}[-] {msg}{color_reset}",
+        "en": "{color_red}[-] {msg}{color_reset}",
+        "pt": "{color_red}[-] {msg}{color_reset}",
+    },
+    "utils.symbols_no_matches": {
+        "es": "  {color_dim}(sin coincidencias para '{pattern}'){color_reset}",
+        "en": "  {color_dim}(no matches for '{pattern}'){color_reset}",
+        "pt": "  {color_dim}(sem correspondências para '{pattern}'){color_reset}",
+    },
+}
+i18n.register(STRINGS)
 
 
 def clean_macos_junk(project_dir):
@@ -25,7 +167,7 @@ def clean_macos_junk(project_dir):
                     removed += 1
                 except OSError:
                     pass
-    print(f"{C.GREEN}[+] {removed} archivo(s) '._*' eliminado(s).{C.RESET}")
+    print(t("utils.macos_junk_removed", color_green=C.GREEN, removed=removed, color_reset=C.RESET))
 
 
 def decompile_all(project_cfg, global_cfg):
@@ -46,34 +188,34 @@ def decompile_all(project_cfg, global_cfg):
     apk_out_dir = decompiled_dir / "apk_jadx"
     apk_out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("[1/2] Decompilación Java (jadx)...")
+    print(t("utils.decompile_jadx_step"))
     if apk_file and shutil.which("jadx"):
         subprocess.run(["jadx", "-d", str(apk_out_dir), str(apk_file)])
-        print(f"{C.GREEN}[+] JADX terminado. Resultados en {apk_out_dir}{C.RESET}")
+        print(t("utils.decompile_jadx_done", color_green=C.GREEN, apk_out_dir=apk_out_dir, color_reset=C.RESET))
     elif not apk_file:
-        print(f"{C.YELLOW}[!] No se encontró el .apk original en {project_dir} -- se omite jadx.{C.RESET}")
+        print(t("utils.decompile_apk_not_found", color_yellow=C.YELLOW, project_dir=project_dir, color_reset=C.RESET))
     else:
-        print(f"{C.YELLOW}[!] jadx no está instalado (brew install jadx) -- se omite.{C.RESET}")
+        print(t("utils.decompile_jadx_not_installed", color_yellow=C.YELLOW, color_reset=C.RESET))
 
-    print("\n[2/2] Decompilación de .so (Ghidra vía devrvk/so-decompiler)...")
+    print(t("utils.decompile_so_step"))
     if not lib_dir.is_dir():
-        print(f"{C.YELLOW}[!] No se encontró {lib_dir} -- ¿ya extrajiste el APK? (se hace al crear el port){C.RESET}")
+        print(t("utils.decompile_lib_dir_missing", color_yellow=C.YELLOW, lib_dir=lib_dir, color_reset=C.RESET))
         return
     if not shutil.which("docker"):
-        print(f"{C.YELLOW}[!] docker no está instalado -- se omite.{C.RESET}")
+        print(t("utils.decompile_docker_not_installed", color_yellow=C.YELLOW, color_reset=C.RESET))
         return
 
     for so_file in lib_dir.rglob("*.so"):
         abi = so_file.parent.name
         so_out = decompiled_dir / f"{so_file.stem}_{abi}" / "ghidra"
         so_out.mkdir(parents=True, exist_ok=True)
-        print(f"[*] Decompilando {so_file.name} ({abi})...")
+        print(t("utils.decompile_so_running", name=so_file.name, abi=abi))
         r = subprocess.run([
             "docker", "run", "--rm", "--platform", "linux/amd64",
             "-v", f"{so_file.parent}:/input", "-v", f"{so_out}:/output",
             "devrvk/so-decompiler", "decompile", f"/input/{so_file.name}", "/output",
         ])
-        print(f"{'[+] Listo: ' + str(so_out) if r.returncode == 0 else '[!] Falló ' + so_file.name}")
+        print(t("utils.decompile_so_done", path=so_out) if r.returncode == 0 else t("utils.decompile_so_failed", name=so_file.name))
 
 
 def run_project_tests(project_cfg):
@@ -83,8 +225,8 @@ def run_project_tests(project_cfg):
     project_dir = Path(project_cfg["_project_dir"])
     script = project_dir / "tests" / "run_tests.sh"
     if not script.exists():
-        print(f"{C.YELLOW}[-] Este proyecto no tiene tests/run_tests.sh.{C.RESET}")
-        print(f"{C.DIM}    Es opcional y específico de cada port -- crealo si necesitás un test suite de host.{C.RESET}")
+        print(t("utils.tests_no_script", color_yellow=C.YELLOW, color_reset=C.RESET))
+        print(t("utils.tests_no_script_hint", color_dim=C.DIM, color_reset=C.RESET))
         return
     subprocess.run(["bash", str(script)], cwd=project_dir)
 
@@ -109,7 +251,7 @@ def translate_shaders_boilerplate(project_cfg):
     out_dir = project_dir / "assets" / "cg"
 
     if not dump_dir.is_dir():
-        print(f"{C.YELLOW}[-] No existe {dump_dir} -- descargá los shaders volcados primero.{C.RESET}")
+        print(t("utils.shaders_no_dump_dir", color_yellow=C.YELLOW, dump_dir=dump_dir, color_reset=C.RESET))
         return
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -122,14 +264,14 @@ def translate_shaders_boilerplate(project_cfg):
             code = pattern.sub(repl, code)
         out_file = out_dir / glsl_file.with_suffix(".cg").name
         out_file.write_text(code.strip())
-        print(f"  {glsl_file.name} -> {out_file.name}")
+        print(t("utils.shaders_converted", src=glsl_file.name, dst=out_file.name))
         count += 1
 
     if count:
-        print(f"{C.GREEN}[+] {count} shader(s) con boilerplate limpio en {out_dir}.{C.RESET}")
-        print(f"{C.YELLOW}[!] Revisar/reescribir a mano cada uno -- esto NO es una traducción GLSL->Cg real.{C.RESET}")
+        print(t("utils.shaders_cleaned_count", color_green=C.GREEN, count=count, out_dir=out_dir, color_reset=C.RESET))
+        print(t("utils.shaders_manual_review_warning", color_yellow=C.YELLOW, color_reset=C.RESET))
     else:
-        print(f"{C.YELLOW}[-] No había .glsl en {dump_dir}.{C.RESET}")
+        print(t("utils.shaders_no_glsl_found", color_yellow=C.YELLOW, dump_dir=dump_dir, color_reset=C.RESET))
 
 
 def translate_docs(project_cfg, target_lang="en"):
@@ -138,13 +280,13 @@ def translate_docs(project_cfg, target_lang="en"):
     try:
         from deep_translator import GoogleTranslator
     except ImportError:
-        print(f"{C.RED}[-] Falta 'deep-translator' -- instalar con: pip install deep-translator{C.RESET}")
+        print(t("utils.docs_missing_deep_translator", color_red=C.RED, color_reset=C.RESET))
         return
 
     project_dir = Path(project_cfg["_project_dir"])
     md_files = [p for p in project_dir.glob("*.md") if not p.name.startswith("._")]
     if not md_files:
-        print(f"{C.YELLOW}[-] No hay archivos .md en la raíz de {project_dir}.{C.RESET}")
+        print(t("utils.docs_no_md_files", color_yellow=C.YELLOW, project_dir=project_dir, color_reset=C.RESET))
         return
 
     translator = GoogleTranslator(source="auto", target=target_lang)
@@ -153,11 +295,11 @@ def translate_docs(project_cfg, target_lang="en"):
         try:
             translated = translator.translate(text)
         except Exception as e:
-            print(f"{C.RED}[-] Error traduciendo {md.name}: {e}{C.RESET}")
+            print(t("utils.docs_translate_error", color_red=C.RED, name=md.name, error=e, color_reset=C.RESET))
             continue
         out = md.with_name(f"{md.stem}.{target_lang}.md")
         out.write_text(translated)
-        print(f"{C.GREEN}[+] {md.name} -> {out.name}{C.RESET}")
+        print(t("utils.docs_translated", color_green=C.GREEN, src=md.name, dst=out.name, color_reset=C.RESET))
 
 
 def search_symbols(project_cfg, global_cfg, pattern, so_relpath=None):
@@ -178,21 +320,22 @@ def search_symbols(project_cfg, global_cfg, pattern, so_relpath=None):
             so_files = sorted(project_dir.glob("lib/**/*.so"))
 
     if not so_files:
-        print(f"{C.RED}[-] No se encontró ningún .so (ni en <slug>_extract/lib/ ni en lib/).{C.RESET}")
+        print(t("utils.symbols_no_so_found", color_red=C.RED, color_reset=C.RESET))
         return
 
     readelf = shutil.which("arm-vita-eabi-readelf") or "arm-vita-eabi-readelf"
     for so in so_files:
         if not so.exists():
             continue
-        print(f"\n{C.BOLD}--- {so} ---{C.RESET}")
+        print(t("utils.symbols_so_header", color_bold=C.BOLD, so=so, color_reset=C.RESET))
         r = subprocess.run([readelf, "-W", "--dyn-syms", str(so)], capture_output=True, text=True)
         if r.returncode != 0:
-            print(f"{C.RED}[-] {r.stderr.strip() or 'readelf falló (¿VITASDK en PATH?)'}{C.RESET}")
+            msg = r.stderr.strip() or t("utils.symbols_readelf_failed_fallback")
+            print(t("utils.symbols_error_line", color_red=C.RED, msg=msg, color_reset=C.RESET))
             continue
         matches = [line for line in r.stdout.splitlines() if re.search(pattern, line)]
         if matches:
             for line in matches:
                 print(f"  {line}")
         else:
-            print(f"  {C.DIM}(sin coincidencias para '{pattern}'){C.RESET}")
+            print(t("utils.symbols_no_matches", color_dim=C.DIM, pattern=pattern, color_reset=C.RESET))

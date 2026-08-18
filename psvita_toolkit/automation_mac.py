@@ -11,6 +11,8 @@ Requiere `pip install pyobjc` (para el módulo Quartz). Solo macOS.
 import subprocess
 import time
 
+from . import i18n
+from .i18n import t
 from .tui import C
 
 try:
@@ -18,6 +20,25 @@ try:
     HAVE_QUARTZ = True
 except ImportError:
     HAVE_QUARTZ = False
+
+STRINGS = {
+    "automation_mac.missing_pyobjc": {
+        "es": "[-] Falta pyobjc -- instalar con: pip install pyobjc",
+        "en": "[-] Missing pyobjc -- install with: pip install pyobjc",
+        "pt": "[-] Falta o pyobjc -- instale com: pip install pyobjc",
+    },
+    "automation_mac.unknown_key": {
+        "es": "[-] Tecla desconocida: '{keyname}' (ver automation_mac.KEYCODES)",
+        "en": "[-] Unknown key: '{keyname}' (see automation_mac.KEYCODES)",
+        "pt": "[-] Tecla desconhecida: '{keyname}' (ver automation_mac.KEYCODES)",
+    },
+    "automation_mac.game_row_not_found": {
+        "es": "[!] No se pudo ubicar la fila del juego en la ventana de Vita3K (¿está abierta y con foco?).",
+        "en": "[!] Could not locate the game row in the Vita3K window (is it open and focused?).",
+        "pt": "[!] Não foi possível localizar a linha do jogo na janela do Vita3K (ela está aberta e em foco?).",
+    },
+}
+i18n.register(STRINGS)
 
 KEYCODES = {
     "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
@@ -29,7 +50,7 @@ KEYCODES = {
 
 def _require_quartz():
     if not HAVE_QUARTZ:
-        print(f"{C.RED}[-] Falta pyobjc -- instalar con: pip install pyobjc{C.RESET}")
+        print(f"{C.RED}{t('automation_mac.missing_pyobjc')}{C.RESET}")
         return False
     return True
 
@@ -88,7 +109,7 @@ def key_press(key, hold_sec=0.05):
         return
     code = KEYCODES.get(key.lower())
     if code is None:
-        print(f"{C.RED}[-] Tecla desconocida: '{key}' (ver automation_mac.KEYCODES){C.RESET}")
+        print(f"{C.RED}{t('automation_mac.unknown_key', keyname=key)}{C.RESET}")
         return
     down = Quartz.CGEventCreateKeyboardEvent(None, code, True)
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
@@ -125,8 +146,7 @@ def double_click_first_game_row(offset_x=60, offset_y=38):
     row_x = _osascript(_ROW_POSITION_SCRIPT.format(index=1))
     row_y = _osascript(_ROW_POSITION_SCRIPT.format(index=2))
     if not row_x or not row_y:
-        print(f"{C.YELLOW}[!] No se pudo ubicar la fila del juego en la ventana de Vita3K "
-              f"(¿está abierta y con foco?).{C.RESET}")
+        print(f"{C.YELLOW}{t('automation_mac.game_row_not_found')}{C.RESET}")
         return False
     try:
         click_x = int(float(row_x)) + offset_x
