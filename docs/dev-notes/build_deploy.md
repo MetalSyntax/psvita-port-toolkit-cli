@@ -79,6 +79,20 @@ into the project's real `build_dir` afterward. This means every build reconfigur
 (no CMake cache reuse across runs) -- a real cost, but correctness beats speed here, and it's the
 only way to guarantee this works regardless of where under `BASE_DIR` a project happens to live.
 
+**Real bug hit in practice (staging copied gigabytes it didn't need to)**: the first version of
+`_stage_in_tmp()` only excluded `.git`/dotfiles/the build dir from the `rsync`, so on an adopted
+legacy project it also copied every gitignored asset folder along with the actual source --
+confirmed on Prince of Persia Classic, where `ux0_data/` (725 MB, a locally-staged deployment
+tree with copyrighted game assets), `original/` (473 MB), `apk_decompiled/` (298 MB), and `bin/`
+(100 MB) got copied to `/tmp` on every single build, making it look "stuck" for a long time before
+`cmake`/`make` even started (nearly 1.6 GB of I/O the build never needed). The fix: also pass
+`rsync --filter=":- .gitignore"`, so the project's own `.gitignore` -- which already marks exactly
+this kind of derived/binary/backup content as excluded from git -- is honored the same way for
+staging. Verified against this project: staging dropped from copying ~1.6 GB to ~20 MB (just
+`source/`, `lib/`, `extras/`, `CMakeLists.txt`, and whatever else isn't gitignored), taking ~5
+seconds instead of however long a ~1.6 GB copy takes on that drive. A project with no `.gitignore`
+at all is unaffected -- the filter rule is simply a no-op if the file doesn't exist.
+
 **Real bug hit in practice**: the first version of this fallback ran `cmake`/`make` with the
 toolkit's own inherited environment, unchanged. That's missing exactly what every hand-written
 `build.sh` normally does at its top -- `export VITASDK=...; export PATH="$VITASDK/bin:$PATH"`.

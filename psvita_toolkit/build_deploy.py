@@ -125,6 +125,11 @@ STRINGS = {
         "en": "[!] This project has no build.sh (legacy port) -- building directly with CMake in {build_dir}",
         "pt": "[!] Este projeto não tem build.sh (port legado) -- compilando diretamente com CMake em {build_dir}",
     },
+    "build_deploy.staging_source": {
+        "es": "[*] Copiando el código fuente a un directorio temporal (respeta .gitignore -- puede tardar si hay carpetas grandes sin ignorar)...",
+        "en": "[*] Staging the source into a temp directory (honors .gitignore -- may take a while if large folders aren't ignored)...",
+        "pt": "[*] Copiando o código-fonte para um diretório temporário (respeita .gitignore -- pode demorar se houver pastas grandes não ignoradas)...",
+    },
     "build_deploy.cmake_configure_failed": {
         "es": "[-] cmake falló al configurar -- revisar el output de arriba.",
         "en": "[-] cmake failed to configure -- check the output above.",
@@ -404,14 +409,24 @@ def _stage_in_tmp(project_dir, build_dir):
           sidesteps this; only the final `.vpk`/`eboot.bin`/ELF get copied
           back into the real (possibly space-containing) project directory
           afterward, via `_copy_build_outputs()`.
+    @note Honors the project's own `.gitignore` (via `rsync --filter=":-
+          .gitignore"`) in addition to `.git`/dotfiles/the build dir --
+          without it, this copies every gitignored asset/backup/decompiled
+          folder too (extracted game data, `.apk`/`.obb`, decompile output,
+          old VPK backups), which for an adopted legacy project can be
+          gigabytes and makes the build look "stuck" while it's actually
+          just copying data cmake never needed in the first place. See
+          `docs/dev-notes/build_deploy.md`.
     """
     tmp_root = Path(tempfile.mkdtemp(prefix="psvita-build-"))
     tmp_src = tmp_root / "src"
     tmp_build = tmp_root / "build"
     tmp_src.mkdir()
     tmp_build.mkdir()
+    print(t("build_deploy.staging_source"))
     subprocess.run([
         "rsync", "-a",
+        "--filter", ":- .gitignore",
         "--exclude", ".git", "--exclude", ".*", "--exclude", str(build_dir),
         f"{project_dir}/", f"{tmp_src}/",
     ], check=True)
