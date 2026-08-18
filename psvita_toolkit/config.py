@@ -26,6 +26,10 @@ DEFAULT_VITA_PORT = 1337
 def _expand(p):
     if not p:
         return p
+    p = p.strip()
+    if len(p) >= 2 and ((p[0] == p[-1] == '"') or (p[0] == p[-1] == "'")):
+        p = p[1:-1]
+    p = p.replace("\\ ", " ")
     return str(Path(os.path.expanduser(os.path.expandvars(p))))
 
 
