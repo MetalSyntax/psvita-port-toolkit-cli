@@ -1,9 +1,12 @@
-"""
-Utilidades varias: limpieza de basura de macOS, re-decompilación, corrida de
-tests del proyecto, traducción de shaders/documentación, búsqueda genérica
-de símbolos en los .so (reemplaza el cheatsheet ai_bash_commands.sh, que
-tenía offsets hardcodeados de UN binario puntual -- acá se busca por patrón,
-sin asumir ningún símbolo/motor en particular).
+"""!
+@file utils.py
+@brief Misc utilities: macOS junk cleanup, re-decompilation, running project
+       tests, shader/doc translation, generic symbol search in the port's
+       `.so` files.
+
+See `docs/dev-notes/utils.md` for why `search_symbols()` replaces the old
+`ai_bash_commands.sh` cheatsheet, and why `translate_shaders_boilerplate()`
+is boilerplate cleanup rather than a real GLSL->Cg translator.
 """
 
 import os
@@ -171,8 +174,12 @@ def clean_macos_junk(project_dir):
 
 
 def decompile_all(project_cfg, global_cfg):
-    """Re-corre jadx + devrvk/so-decompiler para el proyecto activo --
-    reusa la extracción ya hecha en <slug>_extract/ si existe."""
+    """!
+    @brief Re-run jadx + `devrvk/so-decompiler` for the active project.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict (unused here beyond the shared signature).
+    @note Reuses the extraction already present in `<slug>_extract/`, if any.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     slug = project_cfg["slug"]
     apk_basename = project_cfg.get("apk_basename", "")
@@ -219,9 +226,12 @@ def decompile_all(project_cfg, global_cfg):
 
 
 def run_project_tests(project_cfg):
-    """Corre tests/run_tests.sh DEL PROYECTO (si existe) -- la lógica de qué
-    testear es específica de cada motor/juego, vive en el repo del port, no
-    en el toolkit genérico."""
+    """!
+    @brief Run the project's own `tests/run_tests.sh`, if it has one.
+    @param project_cfg Per-project config dict.
+    @note What to test is engine/game-specific and lives in the port's own
+          repo, not in this generic toolkit.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     script = project_dir / "tests" / "run_tests.sh"
     if not script.exists():
@@ -241,11 +251,15 @@ _GLES_JUNK_RE = [
 
 
 def translate_shaders_boilerplate(project_cfg):
-    """Limpieza de boilerplate GLES en shaders volcados (glsl_dump/*.glsl ->
-    assets/cg/*.cg) -- NO es una traducción GLSL->Cg completa, solo saca
-    precision qualifiers y macros de Android. Cada shader sigue necesitando
-    revisión/reescritura a mano (traducción real de shaders es específica de
-    cada motor)."""
+    """!
+    @brief Strip GLES boilerplate from dumped shaders (`glsl_dump/*.glsl` ->
+           `assets/cg/*.cg`).
+    @param project_cfg Per-project config dict.
+    @warning This is NOT a full GLSL->Cg translation -- it only strips
+             precision qualifiers and Android-specific macros. Every shader
+             still needs manual review/rewriting; real shader translation is
+             engine-specific.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     dump_dir = project_dir / "glsl_dump"
     out_dir = project_dir / "assets" / "cg"
@@ -275,8 +289,15 @@ def translate_shaders_boilerplate(project_cfg):
 
 
 def translate_docs(project_cfg, target_lang="en"):
-    """Traduce en lote los .md del proyecto con deep_translator (Google
-    Translate). Requiere `pip install deep-translator`."""
+    """!
+    @brief Batch-translate the project's own `.md` files with `deep-translator`
+           (Google Translate).
+    @param project_cfg Per-project config dict.
+    @param target_lang Target ISO language code (default `"en"`).
+    @note Requires `pip install deep-translator`. This translates the *port's*
+          documentation into whatever language the user asks for here --
+          unrelated to this toolkit's own UI language (see `i18n.py`).
+    """
     try:
         from deep_translator import GoogleTranslator
     except ImportError:
@@ -303,10 +324,19 @@ def translate_docs(project_cfg, target_lang="en"):
 
 
 def search_symbols(project_cfg, global_cfg, pattern, so_relpath=None):
-    """Búsqueda genérica de símbolos (readelf --dyn-syms) en el/los .so del
-    proyecto, filtrados por una expresión regular a elección -- reemplazo
-    generalizado de ai_bash_commands.sh (que tenía offsets/símbolos
-    hardcodeados de un binario puntual, no reusables entre ports)."""
+    """!
+    @brief Generic symbol search (`readelf --dyn-syms`) across the project's
+           `.so` file(s), filtered by a regex pattern.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict (used to locate VITASDK's `bin/`).
+    @param pattern Regex pattern to filter matching symbol lines.
+    @param so_relpath Optional path (relative to the project) to a specific
+           `.so`; if omitted, auto-discovers `.so` files under
+           `<slug>_extract/lib/` or `lib/`.
+    @note Generalized replacement for `ai_bash_commands.sh`, whose offsets and
+          symbol names were hardcoded to one specific binary and not reusable
+          across ports. See `docs/dev-notes/utils.md`.
+    """
     project_dir = Path(project_cfg["_project_dir"])
     vitasdk_bin = os.path.join(global_cfg.get("vitasdk", ""), "bin")
     if os.path.isdir(vitasdk_bin) and vitasdk_bin not in os.environ.get("PATH", ""):

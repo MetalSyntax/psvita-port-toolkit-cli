@@ -1,15 +1,17 @@
-"""
-Punto de entrada. Ejecutar con:
+"""!
+@file __main__.py
+@brief Entry point. Run with `python3 -m psvita_toolkit` (or the `bin/psvita-toolkit` shim).
 
-    python3 -m psvita_toolkit
-    (o el shim bin/psvita-toolkit, que hace exactamente esto)
+@details
+Flow:
+  1. Global config (asked once, then persisted).
+  2. Project selector: continue with the last one, pick another from the
+     list detected under `BASE_DIR`, a manual path, or create a new port
+     from scratch.
+  3. Main project menu -- fully navigable, with `M` returning here from any
+     submenu and an explicit option to switch project.
 
-Flujo:
-  1. Config global (una sola vez, después queda guardada).
-  2. Selector de proyecto: continuar con el último, elegir otro de la lista
-     detectada bajo BASE_DIR, ruta manual, o crear un port nuevo desde cero.
-  3. Menú principal del proyecto -- todo navegable, con 'M' para volver acá
-     desde cualquier submenú y una opción explícita para cambiar de proyecto.
+See `docs/dev-notes/__main__.md` for the rationale behind this structure.
 """
 
 from pathlib import Path
@@ -335,9 +337,9 @@ def _ask_reference_dir():
 
 
 def _ask_lang():
-    # Nota: esto pregunta el idioma DESTINO para utils.translate_docs() (que
-    # traduce los .md del proyecto que se está porteando), no tiene relación
-    # con el idioma de la UI de este toolkit (ese es i18n.set_language()).
+    # Note: this asks for the TARGET language for utils.translate_docs() (which
+    # translates the .md files of the project being ported), unrelated to this
+    # toolkit's own UI language (that one is i18n.set_language()).
     return input(t("main.ask_lang")).strip() or "en"
 
 
@@ -389,6 +391,19 @@ def _raise_exit_app():
 
 
 def show_project_menu(project_cfg, global_cfg):
+    """!
+    @brief Drive the active project's main menu until the user switches
+           project or exits.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict.
+    @note Control-flow contract: this loop catches `tui.GoToMainMenu` raised
+          by any nested submenu/action and simply redraws this same menu --
+          that's what makes pressing `M` (or Ctrl+C) from any depth return
+          here. Backing out of the menu itself (0/Q) has nowhere shallower to
+          go, so it raises `tui.SwitchProject` to hand control back to
+          `main()`'s project selector. `tui.ExitApp` is not caught here; it
+          propagates up to `main()`.
+    """
     items = [
         (t("main.menu.build_deploy"),
          lambda: build_deploy.build_and_deploy_wizard(project_cfg, global_cfg)),
@@ -419,14 +434,21 @@ def show_project_menu(project_cfg, global_cfg):
                 icon="🎮",
                 header_extra=_status_header(project_cfg),
             )
-            # 0/Q en el menú principal: no hay a dónde volver salvo el
-            # selector de proyectos.
+            # 0/Q on the main menu: the only place left to go back to is the
+            # project selector.
             raise tui.SwitchProject()
         except tui.GoToMainMenu:
             continue
 
 
 def main():
+    """!
+    @brief Toolkit entry point: bootstrap global config, then loop between
+           the project selector and the active project's main menu.
+    @note Control-flow contract: `tui.ExitApp` (from either loop) breaks out
+          for good; `tui.SwitchProject` (raised by `show_project_menu()`)
+          just `continue`s this loop, returning to `project.select_or_create_project()`.
+    """
     global_cfg = cfgmod.ensure_global_config(tui)
 
     while True:

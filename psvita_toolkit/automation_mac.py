@@ -1,11 +1,18 @@
-"""
-Automatización de UI para Vita3K en macOS -- integrado desde
-porting_tools/automation/*.py (click_helper, hold_click, mousedown/up_only,
-key_helper). Vita3K usa una UI Qt que NO responde a clics sintéticos de
-accesibilidad (osascript/AppleScript) -- hace falta inyectar eventos reales
-de mouse/teclado a nivel de sistema operativo vía Quartz.
+"""!
+@file automation_mac.py
+@brief Vita3K UI automation on macOS: synthetic mouse clicks and key presses
+       via Quartz, plus AppleScript helpers to bring Vita3K to front and
+       double-click the first game row in its library.
 
-Requiere `pip install pyobjc` (para el módulo Quartz). Solo macOS.
+@details
+Vita3K's UI is Qt-based and does NOT respond to accessibility-level synthetic
+clicks (`osascript`/AppleScript) -- real OS-level mouse/keyboard events must
+be injected via Quartz instead. Requires `pip install pyobjc` (for the
+`Quartz` module). macOS only.
+
+See `docs/dev-notes/automation_mac.md` for why this module exists at all
+(ported from `porting_tools/automation/*.py`) and the empirical-offset
+caveat on `double_click_first_game_row()`.
 """
 
 import subprocess
@@ -119,7 +126,7 @@ def key_press(key, hold_sec=0.05):
 
 
 # ---------------------------------------------------------------------------
-# Doble clic en el ícono del juego dentro de la biblioteca de Vita3K.
+# Double-click on the game icon inside Vita3K's library.
 # ---------------------------------------------------------------------------
 
 _ROW_POSITION_SCRIPT = """
@@ -140,9 +147,16 @@ def _osascript(script):
 
 
 def double_click_first_game_row(offset_x=60, offset_y=38):
-    """Doble clic sobre la primera fila de la biblioteca de Vita3K -- offset
-    fijo (fila -> título) medido empíricamente; ajustar si Vita3K cambia su
-    layout de UI."""
+    """!
+    @brief Double-click the first row of Vita3K's game library.
+    @param offset_x Pixel offset from the row's origin to the click point (X).
+    @param offset_y Pixel offset from the row's origin to the click point (Y).
+    @return `True` if the click was performed, `False` if the row couldn't be
+            located or its position couldn't be parsed.
+    @warning The `(offset_x, offset_y)` defaults were measured empirically
+             (row position -> title) against Vita3K's current UI layout;
+             they may need adjusting if that layout changes.
+    """
     row_x = _osascript(_ROW_POSITION_SCRIPT.format(index=1))
     row_y = _osascript(_ROW_POSITION_SCRIPT.format(index=2))
     if not row_x or not row_y:
