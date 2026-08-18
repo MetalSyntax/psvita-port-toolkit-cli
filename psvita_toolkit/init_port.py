@@ -32,6 +32,19 @@ def _have(cmd):
     return shutil.which(cmd) is not None
 
 
+def _same_file(a, b):
+    """os.path.samefile() compara por inode/dispositivo -- a diferencia de
+    comparar Path.resolve() como string, esto detecta correctamente el mismo
+    archivo aun en un filesystem case-insensitive (default en macOS), donde
+    dos rutas que difieren solo en mayúsculas/minúsculas (ej. 'ILLUSIA-vita'
+    vs 'Illusia-vita') apuntan al mismo archivo pero no son iguales como
+    string."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def _have_docker_image(image):
     if not _have("docker"):
         return False
@@ -188,9 +201,11 @@ def place_apk_and_detect(ctx):
 
     print("[*] Copiando .apk (y su .zip gemelo)...")
     dest_apk = new_dir / apk_basename
-    if dest_apk.resolve() != apk_path.resolve():
+    if not _same_file(apk_path, dest_apk):
         shutil.copy2(apk_path, dest_apk)
-    shutil.copy2(apk_path, new_dir / f"{apk_stem}.zip")
+    dest_zip = new_dir / f"{apk_stem}.zip"
+    if not _same_file(apk_path, dest_zip):
+        shutil.copy2(apk_path, dest_zip)
 
     extract_dir = new_dir / f"{ctx['slug']}_extract"
     print(f"[*] Extrayendo APK a {extract_dir.name}/ ...")
