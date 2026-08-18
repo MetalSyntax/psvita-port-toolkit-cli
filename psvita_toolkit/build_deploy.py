@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -145,6 +146,11 @@ STRINGS = {
         "es": "  {name} -- {desc} [{default}]: ",
         "en": "  {name} -- {desc} [{default}]: ",
         "pt": "  {name} -- {desc} [{default}]: ",
+    },
+    "build_deploy.outputs_copied": {
+        "es": "[+] Resultados del build copiados a {build_dir}",
+        "en": "[+] Build outputs copied to {build_dir}",
+        "pt": "[+] Resultados do build copiados para {build_dir}",
     },
     "build_deploy.running_command": {
         "es": "[*] Ejecutando: {cmd}",
@@ -457,14 +463,83 @@ def _vitasdk_env(global_cfg):
     return env
 
 
+def _stage_in_tmp(project_dir, build_dir):
+    """!
+    @brief Copy `project_dir`'s source into a space-free `/tmp` directory,
+           and create a matching space-free `/tmp` build directory.
+    @param project_dir Path to the real project directory (may contain spaces).
+    @param build_dir Build output directory name, relative to `project_dir`
+           -- excluded from the copy (rebuilt fresh in `/tmp`).
+    @return `(tmp_root, tmp_src, tmp_build)` -- `tmp_root` is the parent to
+            clean up afterward, `tmp_src`/`tmp_build` are its two subdirs.
+    @note `vita-pack-vpk` (part of the VITASDK toolchain) cannot handle a
+          working directory whose absolute path contains a space -- see
+          `docs/dev-notes/build_deploy.md`. Building entirely under `/tmp`
+          sidesteps this; only the final `.vpk`/`eboot.bin`/ELF get copied
+          back into the real (possibly space-containing) project directory
+          afterward, via `_copy_build_outputs()`.
+    """
+    tmp_root = Path(tempfile.mkdtemp(prefix="psvita-build-"))
+    tmp_src = tmp_root / "src"
+    tmp_build = tmp_root / "build"
+    tmp_src.mkdir()
+    tmp_build.mkdir()
+    subprocess.run([
+        "rsync", "-a",
+        "--exclude", ".git", "--exclude", ".*", "--exclude", str(build_dir),
+        f"{project_dir}/", f"{tmp_src}/",
+    ], check=True)
+    return tmp_root, tmp_src, tmp_build
+
+
+def _is_elf(path):
+    """!
+    @brief Check whether a file is an ELF binary, by its magic bytes.
+    @param path File to check.
+    @return `True` if `path` starts with the ELF magic number.
+    """
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def _copy_build_outputs(tmp_build, build_path):
+    """!
+    @brief Copy build outputs from a `/tmp` build directory back into the
+           project's real `build_dir`.
+    @param tmp_build The `/tmp` directory the build actually ran in.
+    @param build_path Real (possibly space-containing) destination directory
+           (created if missing).
+    @return List of copied file names.
+    @note Also copies any bare ELF executable found at `tmp_build`'s top
+          level (e.g. the raw linked binary before `.velf`/`.self`
+          conversion, named after the CMake target) as `<name>.elf` --
+          `crash_analyzer.py` needs this to symbolicate crash dumps, and it
+          would otherwise be lost once `/tmp` is cleaned up.
+    """
+    build_path.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for pattern in ("*.vpk", "eboot.bin", "*.velf", "*.self"):
+        for f in tmp_build.glob(pattern):
+            shutil.copy2(f, build_path / f.name)
+            copied.append(f.name)
+    for f in tmp_build.iterdir():
+        if f.is_file() and f.suffix == "" and _is_elf(f):
+            dest_name = f"{f.name}.elf"
+            shutil.copy2(f, build_path / dest_name)
+            copied.append(dest_name)
+    return copied
+
+
 def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
     """!
-    @brief Fallback build path for projects with no `build.sh`: run `cmake`
-           then `make` directly in `build_dir`.
-    @param project_dir Path to the project directory (passed to `cmake` as
-           the source dir).
-    @param build_dir Build output directory, relative to `project_dir`
-           (created if missing; reuses its CMake cache if already configured).
+    @brief Fallback build path for projects with no `build.sh`: stage the
+           source under `/tmp`, run `cmake` then `make` there, and copy the
+           resulting `.vpk`/`eboot.bin`/ELF back into the real `build_dir`.
+    @param project_dir Path to the project directory.
+    @param build_dir Build output directory, relative to `project_dir`.
     @param preset Preset value; mapped to `-DCMAKE_BUILD_TYPE=...` unless
            `"custom"` or falsy.
     @param extra_args Extra arguments appended to the `cmake` invocation.
@@ -473,30 +548,42 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
     @return `True` if both `cmake` and `make` exited with code 0.
     @note Legacy ports adopted from before this toolkit (created by hand with
           `cmake`/`make` directly, never from `soloader-boilerplate`) have no
-          `build.sh` at all -- see `docs/dev-notes/build_deploy.md`.
+          `build.sh` at all -- see `docs/dev-notes/build_deploy.md`. Every
+          call reconfigures from scratch in a fresh `/tmp` directory (no
+          CMake cache reuse) -- slower than an in-place build, but avoids the
+          space-in-path bug regardless of where `project_dir` lives on disk.
     """
     build_path = project_dir / build_dir
-    build_path.mkdir(parents=True, exist_ok=True)
     print(f"{C.YELLOW}{t('build_deploy.no_build_sh_fallback', build_dir=build_path)}{C.RESET}")
 
     env = _vitasdk_env(global_cfg)
+    extra_cmake_opts = _prompt_cmake_options(project_dir)
 
-    cmake_args = ["cmake", str(project_dir)]
-    if preset and preset != "custom":
-        cmake_args.append(f"-DCMAKE_BUILD_TYPE={_CMAKE_BUILD_TYPES.get(preset, 'Release')}")
-    cmake_args.extend(extra_args or [])
-    cmake_args.extend(_prompt_cmake_options(project_dir))
-    print(f"{t('build_deploy.running_command', cmd=' '.join(cmake_args))}\n")
-    r = subprocess.run(cmake_args, cwd=build_path, env=env)
-    if r.returncode != 0:
-        print(f"{C.RED}{t('build_deploy.cmake_configure_failed')}{C.RESET}")
-        return False
+    tmp_root, tmp_src, tmp_build = _stage_in_tmp(project_dir, build_dir)
+    try:
+        cmake_args = ["cmake", str(tmp_src)]
+        if preset and preset != "custom":
+            cmake_args.append(f"-DCMAKE_BUILD_TYPE={_CMAKE_BUILD_TYPES.get(preset, 'Release')}")
+        cmake_args.extend(extra_args or [])
+        cmake_args.extend(extra_cmake_opts)
+        print(f"{t('build_deploy.running_command', cmd=' '.join(cmake_args))}\n")
+        r = subprocess.run(cmake_args, cwd=tmp_build, env=env)
+        if r.returncode != 0:
+            print(f"{C.RED}{t('build_deploy.cmake_configure_failed')}{C.RESET}")
+            return False
 
-    jobs = subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True, text=True).stdout.strip() or "4"
-    make_args = ["make", f"-j{jobs}"]
-    print(f"\n{t('build_deploy.running_command', cmd=' '.join(make_args))}\n")
-    r = subprocess.run(make_args, cwd=build_path, env=env)
-    return r.returncode == 0
+        jobs = subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True, text=True).stdout.strip() or "4"
+        make_args = ["make", f"-j{jobs}"]
+        print(f"\n{t('build_deploy.running_command', cmd=' '.join(make_args))}\n")
+        r = subprocess.run(make_args, cwd=tmp_build, env=env)
+        if r.returncode != 0:
+            return False
+
+        if _copy_build_outputs(tmp_build, build_path):
+            print(f"{C.GREEN}{t('build_deploy.outputs_copied', build_dir=build_path)}{C.RESET}")
+        return True
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def _run_build(project_dir, preset, extra_args, build_dir="build", global_cfg=None):

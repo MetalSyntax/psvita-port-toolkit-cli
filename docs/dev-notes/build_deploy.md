@@ -52,6 +52,20 @@ project using the standard `option()` pattern gets its toggles exposed automatic
 per-project special-casing, extending the same "auto-discover, don't hardcode" principle already
 used for `build.sh`-based extra flags to the `build.sh`-less fallback path too.
 
+**Real bug hit in practice (space-in-path, `vita-pack-vpk`)**: the first version of this fallback
+ran `cmake`/`make` directly inside `<project_dir>/<build_dir>/` -- fine for `cmake`/`make`
+themselves, but `vita-pack-vpk` (invoked by the Vita CMake toolchain's custom `*-vpk` build step)
+cannot handle a working directory whose absolute path contains a space, and failed with
+`Error creating: 'Develop/Prince': Failure to create temporary file` on a project living under
+`/Volumes/Seagate/PSVITA Develop/Prince of Persia /` -- the exact historical gotcha the original
+per-project `build_and_install.sh` scripts always dodged by staging the build entirely under
+`/tmp`. `_stage_in_tmp()`/`_copy_build_outputs()` now replicate that: `rsync` the source (minus
+`.git`/dotfiles/the build dir itself) into a fresh space-free `/tmp` directory, configure and
+build entirely there, then copy just the `.vpk`/`eboot.bin`/`.velf`/`.self`/raw-ELF outputs back
+into the project's real `build_dir` afterward. This means every build reconfigures from scratch
+(no CMake cache reuse across runs) -- a real cost, but correctness beats speed here, and it's the
+only way to guarantee this works regardless of where under `BASE_DIR` a project happens to live.
+
 **Real bug hit in practice**: the first version of this fallback ran `cmake`/`make` with the
 toolkit's own inherited environment, unchanged. That's missing exactly what every hand-written
 `build.sh` normally does at its top -- `export VITASDK=...; export PATH="$VITASDK/bin:$PATH"`.
