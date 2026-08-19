@@ -196,6 +196,51 @@ STRINGS = {
         "en": "{color_green}[+] docs/api/*.md generated for {count} module(s).{color_reset}",
         "pt": "{color_green}[+] docs/api/*.md gerado para {count} módulo(s).{color_reset}",
     },
+    "utils.gen_docs_menu_title": {
+        "es": "📖 Generador de Documentación",
+        "en": "📖 Documentation Generator",
+        "pt": "📖 Gerador de Documentação",
+    },
+    "utils.gen_docs_opt_project": {
+        "es": "🎮 Extraer comentarios del proyecto activo ({game_name} → docs/*.md)",
+        "en": "🎮 Extract comments from active project ({game_name} → docs/*.md)",
+        "pt": "🎮 Extrair comentários do projeto ativo ({game_name} → docs/*.md)",
+    },
+    "utils.gen_docs_opt_manual": {
+        "es": "🎯 Elegir archivo o carpeta manual (.c, .h, .cpp) → docs/*.md",
+        "en": "🎯 Choose manual file or folder (.c, .h, .cpp) → docs/*.md",
+        "pt": "🎯 Escolher arquivo ou pasta manual (.c, .h, .cpp) → docs/*.md",
+    },
+    "utils.gen_docs_opt_auto": {
+        "es": "⚡ Documentar módulos del propio toolkit (psvita_toolkit → docs/api/*.md)",
+        "en": "⚡ Document toolkit's own modules (psvita_toolkit → docs/api/*.md)",
+        "pt": "⚡ Documentar módulos do próprio toolkit (psvita_toolkit → docs/api/*.md)",
+    },
+    "utils.gen_docs_opt_skeletons": {
+        "es": "🦴 Insertar esqueletos Doxygen faltantes en el toolkit",
+        "en": "🦴 Insert missing Doxygen skeletons in toolkit",
+        "pt": "🦴 Inserir esqueletos Doxygen ausentes no toolkit",
+    },
+    "utils.gen_docs_manual_prompt": {
+        "es": "Ruta del archivo o carpeta a procesar (.c, .h, .cpp):",
+        "en": "Path to file or folder to process (.c, .h, .cpp):",
+        "pt": "Caminho do arquivo ou pasta a processar (.c, .h, .cpp):",
+    },
+    "utils.gen_docs_manual_dryrun": {
+        "es": "¿Modo de prueba (Dry-run, sin modificar archivos)?",
+        "en": "Dry-run mode (do not modify files)?",
+        "pt": "Modo de teste (Dry-run, sem modificar arquivos)?",
+    },
+    "utils.gen_docs_skeletons_done": {
+        "es": "{color_green}[+] Se insertaron {total} esqueleto(s) Doxygen en el toolkit.{color_reset}",
+        "en": "{color_green}[+] Inserted {total} Doxygen skeleton(s) in toolkit.{color_reset}",
+        "pt": "{color_green}[+] Foram inseridos {total} esqueleto(s) Doxygen no toolkit.{color_reset}",
+    },
+    "utils.gen_docs_project_done": {
+        "es": "{color_green}[+] Documentación generada en: {docs_dir}{color_reset}",
+        "en": "{color_green}[+] Documentation generated in: {docs_dir}{color_reset}",
+        "pt": "{color_green}[+] Documentação gerada em: {docs_dir}{color_reset}",
+    },
 }
 i18n.register(STRINGS)
 
@@ -328,15 +373,14 @@ def translate_shaders_boilerplate(project_cfg):
         print(t("utils.shaders_no_glsl_found", color_yellow=C.YELLOW, dump_dir=dump_dir, color_reset=C.RESET))
 
 
-def translate_docs(project_cfg, target_lang="en"):
+def translate_docs(project_cfg, target_lang="en", custom_path=None, overwrite=False):
     """!
-    @brief Batch-translate the project's own `.md` files with `deep-translator`
-           (Google Translate).
+    @brief Batch-translate markdown documentation (.md) of the port project.
     @param project_cfg Per-project config dict.
     @param target_lang Target ISO language code (default `"en"`).
-    @note Requires `pip install deep-translator`. This translates the *port's*
-          documentation into whatever language the user asks for here --
-          unrelated to this toolkit's own UI language (see `i18n.py`).
+    @param custom_path Optional custom path (relative or absolute) to a directory or .md file.
+    @param overwrite If True, overwrites original files in place instead of creating `<file>.<lang>.md`.
+    @note Requires `pip install deep-translator`.
     """
     try:
         from deep_translator import GoogleTranslator
@@ -344,23 +388,77 @@ def translate_docs(project_cfg, target_lang="en"):
         print(t("utils.docs_missing_deep_translator", color_red=C.RED, color_reset=C.RESET))
         return
 
-    project_dir = Path(project_cfg["_project_dir"])
-    md_files = [p for p in project_dir.glob("*.md") if not p.name.startswith("._")]
-    if not md_files:
-        print(t("utils.docs_no_md_files", color_yellow=C.YELLOW, project_dir=project_dir, color_reset=C.RESET))
+    project_dir = Path(project_cfg["_project_dir"]).resolve()
+    
+    if custom_path:
+        raw_str = str(custom_path).strip().strip("'\"")
+        p = Path(raw_str)
+        base_path = p.resolve() if p.is_absolute() else (project_dir / p).resolve()
+    else:
+        base_path = (project_dir / "docs").resolve() if (project_dir / "docs").exists() else project_dir
+
+    if not base_path.exists():
+        print(t("utils.docs_no_md_files", color_yellow=C.YELLOW, project_dir=base_path, color_reset=C.RESET))
         return
 
+    if base_path.is_file():
+        md_files = [base_path]
+    else:
+        # Recursive search for all .md files excluding macOS junk, git, build, and already translated lang files
+        md_files = [
+            p for p in base_path.rglob("*.md")
+            if not p.name.startswith("._")
+            and ".git" not in p.parts
+            and "build" not in p.parts
+            and not (p.stem.endswith(f".{target_lang}") if not overwrite else False)
+        ]
+
+    if not md_files:
+        print(t("utils.docs_no_md_files", color_yellow=C.YELLOW, project_dir=base_path, color_reset=C.RESET))
+        return
+
+    print(f"[*] Traduciendo {len(md_files)} archivo(s) .md a '{target_lang}'...")
     translator = GoogleTranslator(source="auto", target=target_lang)
+
     for md in md_files:
         text = md.read_text(errors="ignore")
+        if not text.strip():
+            continue
         try:
-            translated = translator.translate(text)
+            # Handle text translation (split if larger than 4500 chars to avoid API limit)
+            if len(text) < 4500:
+                translated = translator.translate(text)
+            else:
+                paragraphs = text.split("\n\n")
+                translated_parts = []
+                current_chunk = []
+                current_len = 0
+                for para in paragraphs:
+                    if current_len + len(para) + 2 < 4000:
+                        current_chunk.append(para)
+                        current_len += len(para) + 2
+                    else:
+                        chunk_text = "\n\n".join(current_chunk)
+                        if chunk_text.strip():
+                            translated_parts.append(translator.translate(chunk_text))
+                        current_chunk = [para]
+                        current_len = len(para)
+                if current_chunk:
+                    chunk_text = "\n\n".join(current_chunk)
+                    if chunk_text.strip():
+                        translated_parts.append(translator.translate(chunk_text))
+                translated = "\n\n".join(translated_parts)
         except Exception as e:
             print(t("utils.docs_translate_error", color_red=C.RED, name=md.name, error=e, color_reset=C.RESET))
             continue
-        out = md.with_name(f"{md.stem}.{target_lang}.md")
-        out.write_text(translated)
-        print(t("utils.docs_translated", color_green=C.GREEN, src=md.name, dst=out.name, color_reset=C.RESET))
+
+        if overwrite:
+            out = md
+        else:
+            out = md.with_name(f"{md.stem}.{target_lang}.md") if not md.stem.endswith(f".{target_lang}") else md
+        
+        out.write_text(translated, encoding="utf-8")
+        print(t("utils.docs_translated", color_green=C.GREEN, src=md.relative_to(project_dir) if project_dir in md.parents else md.name, dst=out.name, color_reset=C.RESET))
 
 
 def search_symbols(project_cfg, global_cfg, pattern, so_relpath=None):
@@ -411,11 +509,7 @@ def search_symbols(project_cfg, global_cfg, pattern, so_relpath=None):
             print(t("utils.symbols_no_matches", color_dim=C.DIM, pattern=pattern, color_reset=C.RESET))
 
 
-def generate_toolkit_docs():
-    """!
-    @brief Check Doxygen docstrings and generate markdown API reference docs
-           for all modules in the toolkit.
-    """
+def _doc_auto_toolkit():
     from . import gen_docs
 
     print(t("utils.gen_docs_checking"))
@@ -444,4 +538,73 @@ def generate_toolkit_docs():
     if not used_real_tool:
         count = gen_docs.generate_api_docs_fallback()
         print(t("utils.gen_docs_done", color_green=C.GREEN, count=count, color_reset=C.RESET))
+
+
+def _doc_project_extract(project_cfg):
+    from . import gen_docs, tui
+
+    project_dir = Path(project_cfg["_project_dir"]).resolve()
+    print(f"[*] Escaneando proyecto: {project_dir}")
+    print(f"[*] Formatos soportados: .c, .cpp, .h, .py, .txt (comentarios //, /* */ y #)")
+
+    dry_run = tui.confirm(t("utils.gen_docs_manual_dryrun"), default=False)
+    gen_docs.extract_comments_command(project_dir, repo_root=project_dir, dry_run=dry_run)
+
+    if not dry_run:
+        docs_dir = project_dir / "docs"
+        print(t("utils.gen_docs_project_done", color_green=C.GREEN, docs_dir=docs_dir, color_reset=C.RESET))
+
+
+def _doc_manual_extract():
+    from . import gen_docs, tui
+
+    target_path = tui.input_path(t("utils.gen_docs_manual_prompt"), must_exist=True)
+    if not target_path:
+        return
+    target = Path(target_path).resolve()
+    dry_run = tui.confirm(t("utils.gen_docs_manual_dryrun"), default=False)
+    gen_docs.extract_comments_command(target, dry_run=dry_run)
+
+
+def _doc_insert_skeletons():
+    from . import gen_docs, tui
+
+    dry_run = tui.confirm(t("utils.gen_docs_manual_dryrun"), default=False)
+    total = 0
+    for py_file in gen_docs.iter_py_files():
+        n = gen_docs.insert_missing_skeletons(py_file, dry_run=dry_run)
+        if n:
+            print(f"[+] {py_file.name}: {n} skeleton(s)")
+        total += n
+    print(t("utils.gen_docs_skeletons_done", color_green=C.GREEN, total=total, color_reset=C.RESET))
+
+
+def generate_toolkit_docs(project_cfg=None):
+    """!
+    @brief Documentation generator menu:
+           - Extract comments from active port project (loader/ -> docs/*.md)
+           - Manual file or folder comment extraction
+           - Toolkit auto Doxygen/API generator
+           - Toolkit skeletons inserter
+    """
+    from . import tui
+
+    items = []
+    if project_cfg:
+        game_name = project_cfg.get("game_name", "Proyecto")
+        items.append((t("utils.gen_docs_opt_project", game_name=game_name), lambda: _doc_project_extract(project_cfg)))
+
+    items.extend([
+        (t("utils.gen_docs_opt_manual"), _doc_manual_extract),
+        (t("utils.gen_docs_opt_auto"), _doc_auto_toolkit),
+        (t("utils.gen_docs_opt_skeletons"), _doc_insert_skeletons),
+    ])
+
+    tui.run_menu(
+        t("utils.gen_docs_menu_title"),
+        items,
+        icon="📖",
+    )
+
+
 

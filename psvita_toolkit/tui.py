@@ -100,7 +100,9 @@ class SwitchProject(Exception):
 
 
 def clear():
-    print("\033[H\033[J", end="")
+    # \033[H = cursor home, \033[2J = clear entire screen, \033[3J = clear scrollback buffer
+    sys.stdout.write("\033[H\033[2J\033[3J")
+    sys.stdout.flush()
 
 
 def term_width(default=80):
@@ -188,56 +190,70 @@ def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_ext
     """
     idx = 0
     n = len(items)
-    while True:
-        clear()
-        print_banner(title, subtitle=subtitle, breadcrumb=breadcrumb, icon=icon)
-        if header_extra:
-            header_extra()
-            print()
-
-        for i, (label, _cb) in enumerate(items):
-            prefix = f"{i + 1:2d}. " if i < 9 else "    "
-            if i == idx:
-                print(f"{C.BLUE}\033[1m\033[7m> {prefix}{label} {C.RESET}")
-            else:
-                print(f"  {prefix}{label}")
-
-        _footer_hint()
-
-        try:
-            c = getch()
-        except (EOFError, KeyboardInterrupt):
-            raise GoToMainMenu()
-
-        if c in ("\x1b[A", "k"):
-            idx = (idx - 1) % n
-        elif c in ("\x1b[B", "j"):
-            idx = (idx + 1) % n
-        elif c in ("\r", "\n"):
-            label, cb = items[idx]
-            if cb is None:
-                return
+    # Hide cursor during menu navigation
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
+        while True:
             clear()
-            print(f"{C.GREEN}{C.BOLD}▶ {label}{C.RESET}\n")
+            print_banner(title, subtitle=subtitle, breadcrumb=breadcrumb, icon=icon)
+            if header_extra:
+                header_extra()
+                print()
+
+            for i, (label, _cb) in enumerate(items):
+                prefix = f"{i + 1:2d}. " if i < 9 else "    "
+                if i == idx:
+                    print(f"{C.BLUE}\033[1m\033[7m> {prefix}{label} {C.RESET}")
+                else:
+                    print(f"  {prefix}{label}")
+
+            _footer_hint()
+
             try:
-                cb()
-            except (GoToMainMenu, ExitApp, SwitchProject):
-                raise
-            except KeyboardInterrupt:
-                print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
-            except Exception as e:  # noqa: BLE001 -- the menu must never die from an action's error
-                print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
-            pause()
-        elif c in ("0", "q", "Q"):
-            return
-        elif c in ("m", "M"):
-            raise GoToMainMenu()
-        elif c == "\x03":
-            raise GoToMainMenu()
-        elif c.isdigit():
-            v = int(c)
-            if 1 <= v <= min(9, n):
-                idx = v - 1
+                c = getch()
+            except (EOFError, KeyboardInterrupt):
+                raise GoToMainMenu()
+
+            if c in ("\x1b[A", "k"):
+                idx = (idx - 1) % n
+            elif c in ("\x1b[B", "j"):
+                idx = (idx + 1) % n
+            elif c in ("\r", "\n"):
+                label, cb = items[idx]
+                if cb is None:
+                    return
+                # Show cursor for normal command execution
+                sys.stdout.write("\033[?25h")
+                sys.stdout.flush()
+                clear()
+                print(f"{C.GREEN}{C.BOLD}▶ {label}{C.RESET}\n")
+                try:
+                    cb()
+                except (GoToMainMenu, ExitApp, SwitchProject):
+                    raise
+                except KeyboardInterrupt:
+                    print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
+                except Exception as e:  # noqa: BLE001 -- the menu must never die from an action's error
+                    print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
+                pause()
+                # Re-hide cursor for menu navigation
+                sys.stdout.write("\033[?25l")
+                sys.stdout.flush()
+            elif c in ("0", "q", "Q"):
+                return
+            elif c in ("m", "M"):
+                raise GoToMainMenu()
+            elif c == "\x03":
+                raise GoToMainMenu()
+            elif c.isdigit():
+                v = int(c)
+                if 1 <= v <= min(9, n):
+                    idx = v - 1
+    finally:
+        # Always restore cursor when leaving menu
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------

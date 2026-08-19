@@ -354,8 +354,9 @@ def _write_doxyfile(doxygen_bin, doxyfile_path, xml_out_dir):
     subprocess.run([doxygen_bin, "-g", str(doxyfile_path)], cwd=REPO_ROOT,
                     capture_output=True, text=True, check=True)
     text = doxyfile_path.read_text(encoding="utf-8")
-    overrides = dict(_DOXYFILE_OVERRIDES, XML_OUTPUT=str(xml_out_dir.relative_to(REPO_ROOT)),
-                      OUTPUT_DIRECTORY=str(xml_out_dir.parent.relative_to(REPO_ROOT)))
+    overrides = dict(_DOXYFILE_OVERRIDES,
+                     XML_OUTPUT=str(xml_out_dir.name),
+                     OUTPUT_DIRECTORY=str(xml_out_dir.parent))
     for key, value in overrides.items():
         pattern = re.compile(rf"^{key}\s*=.*$", re.MULTILINE)
         replacement = f"{key} = {value}"
@@ -367,24 +368,25 @@ def _write_doxyfile(doxygen_bin, doxyfile_path, xml_out_dir):
 
 
 def generate_api_docs_with_doxygen(doxygen_bin, doxybook2_bin):
+    if not doxybook2_bin:
+        print("[!] doxygen está instalado pero falta doxybook2 (necesario para convertir XML a Markdown).")
+        print("[!] Usando el extractor Markdown integrado (fallback).")
+        return False
+
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
+        tmp_path = Path(tmp).resolve()
         xml_out = tmp_path / "xml"
         doxyfile = tmp_path / "Doxyfile"
         _write_doxyfile(doxygen_bin, doxyfile, xml_out)
         r = subprocess.run([doxygen_bin, str(doxyfile)], cwd=REPO_ROOT, capture_output=True, text=True)
         if r.returncode != 0:
-            print(f"[-] doxygen failed:\n{r.stderr}")
-            return False
-        if not doxybook2_bin:
-            print("[!] doxygen ran (XML only) -- install doxybook2 to also get docs/api/*.md; "
-                  "falling back to the built-in Markdown extractor for now.")
+            print(f"[-] doxygen falló:\n{r.stderr}")
             return False
         API_DOCS_DIR.mkdir(parents=True, exist_ok=True)
         r = subprocess.run([doxybook2_bin, "--input", str(xml_out), "--output", str(API_DOCS_DIR)],
                             cwd=REPO_ROOT, capture_output=True, text=True)
         if r.returncode != 0:
-            print(f"[-] doxybook2 failed:\n{r.stderr}")
+            print(f"[-] doxybook2 falló:\n{r.stderr}")
             return False
         return True
 
@@ -392,6 +394,35 @@ def generate_api_docs_with_doxygen(doxygen_bin, doxybook2_bin):
 # ---------------------------------------------------------------------------
 # Step 3: Architecture / Design Comments Extraction & Doxygen Transformation
 # ---------------------------------------------------------------------------
+
+_TRANSLATION_CACHE = {}
+
+def _translate_to_english(text):
+    """!
+    @brief Translate comment/text to English using deep-translator if available.
+    @param text String to translate.
+    @return Translated string (or original string if translator is unavailable or translation fails).
+    """
+    if not text or not text.strip():
+        return text
+    clean_text = text.strip()
+    if clean_text in _TRANSLATION_CACHE:
+        return _TRANSLATION_CACHE[clean_text]
+
+    try:
+        from deep_translator import GoogleTranslator
+        translator = GoogleTranslator(source="auto", target="en")
+        # Split very long text if needed, else translate directly
+        if len(clean_text) < 4500:
+            translated = translator.translate(clean_text)
+        else:
+            parts = [clean_text[i:i+4000] for i in range(0, len(clean_text), 4000)]
+            translated = " ".join([translator.translate(p) for p in parts if p.strip()])
+        _TRANSLATION_CACHE[clean_text] = translated.strip()
+        return _TRANSLATION_CACHE[clean_text]
+    except Exception:
+        return clean_text
+
 
 def _find_target_symbol(lines, start_line_idx):
     """!
@@ -401,6 +432,7 @@ def _find_target_symbol(lines, start_line_idx):
     func_pattern = re.compile(r'^\s*(?:(?:static|inline|extern|const|unsigned|void|int|char|float|double|uint\d+_t|int\d+_t|size_t|GLuint|Sce\w+)\s+)+[*]*\s*([a-zA-Z_]\w*)\s*\(([^)]*)\)')
     struct_pattern = re.compile(r'^\s*(?:typedef\s+)?struct\s*(?:[a-zA-Z_]\w*)?\s*\{?')
     define_pattern = re.compile(r'^\s*#define\s+([a-zA-Z_]\w*)')
+    var_or_member_pattern = re.compile(r'^\s*(?:(?:static|const|unsigned|void|int|char|float|double|uint\d+_t|int\d+_t|size_t|GLuint|Sce\w+|int16_t|int32_t|int64_t|uint16_t|uint32_t|uint64_t|OggVorbis_File|voice_t)\s+)+[*]*\s*([a-zA-Z_]\w*)\s*(?:\[[^\]]*\])?\s*(?:[=;,])')
 
     for i in range(start_line_idx, min(len(lines), start_line_idx + 12)):
         line = lines[i].strip()
@@ -420,33 +452,164 @@ def _find_target_symbol(lines, start_line_idx):
         if struct_pattern.match(line):
             return ("struct", "struct", line, i)
 
+        m_var = var_or_member_pattern.match(line)
+        if m_var:
+            return (m_var.group(1), "variable", line, i)
+
     return (None, "general", "", start_line_idx)
 
 
-def _generate_doxygen_c(symbol_name, symbol_kind, comment_clean, doc_relpath):
+def _clean_summary(text, max_len=140):
     """!
-    @brief Build a C/C++ Doxygen comment from the extracted comment and target symbol.
+    @brief Extract a clean, coherent first sentence or complete summary from comment text in English.
+    @param text Raw extracted comment text.
+    @param max_len Maximum length for the summary line.
+    @return Cleaned single-line summary translated to English.
     """
-    first_sentence = comment_clean.split(".")[0].strip() if "." in comment_clean else comment_clean.split("\n")[0].strip()
-    if len(first_sentence) > 100:
-        first_sentence = first_sentence[:97] + "..."
+    cleaned = re.sub(r"^[#/*\-\s]+", "", text).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if not cleaned:
+        return "Design note"
 
-    lines = ["/**"]
-    lines.append(f" * @brief {first_sentence}.")
+    # Translate the summary text to English
+    translated = _translate_to_english(cleaned)
+
+    # 1. Try to find the first complete sentence ending in ., !, or ?
+    match = re.search(r"^([^.!?\n]+[.!?])", translated)
+    if match:
+        sentence = match.group(1).strip()
+        # Ensure it has balanced parentheses
+        if sentence.count("(") == sentence.count(")") and len(sentence) <= max_len and len(sentence) > 15:
+            return sentence.rstrip(".!?")
+
+    # 2. Try to cut at natural clauses (--, :, ;) if available before max_len
+    for sep in (" -- ", " - ", ": ", "; "):
+        if sep in translated:
+            part = translated.split(sep, 1)[0].strip()
+            if 15 <= len(part) <= max_len and part.count("(") == part.count(")"):
+                return part.rstrip(".!?:")
+
+    # 3. If too long, cut at word boundary without leaving unclosed parentheses or dangling commas
+    if len(translated) > max_len:
+        cut = translated[:max_len]
+        last_space = cut.rfind(" ")
+        if last_space > 30:
+            result = cut[:last_space].strip()
+        else:
+            result = cut.strip()
+    else:
+        result = translated.strip()
+
+    # Clean up trailing punctuation, unclosed parentheses, or incomplete words
+    result = re.sub(r"[,:;\-\(\[\{]+$", "", result).strip()
+    if result.count("(") > result.count(")"):
+        result += ")"
+    if result.count("[") > result.count("]"):
+        result += "]"
+
+    return result.rstrip(".!?")
+
+
+def _generate_doxygen_c(symbol_name, symbol_kind, comment_clean, doc_relpath, line_num=None, indent=""):
+    """!
+    @brief Build a C/C++ Doxygen comment from the extracted comment and target symbol in English.
+    """
+    summary = _clean_summary(comment_clean)
+    line_ref = f":{line_num}" if line_num else ""
+
+    # For struct fields or inline variables, generate single line Doxygen or clean concise block
+    if symbol_kind == "variable" and len(summary) <= 80:
+        return f"{indent}/**< @brief {summary}. */"
+
+    lines = [f"{indent}/**"]
+    lines.append(f"{indent} * @brief {summary}.")
     if doc_relpath:
-        lines.append(f" * @note Ver {doc_relpath} para el razonamiento de diseño.")
-    lines.append(" */")
+        lines.append(f"{indent} * @note See `{doc_relpath}{line_ref}` for detailed design rationale.")
+    lines.append(f"{indent} */")
     return "\n".join(lines)
 
 
-def process_c_comments_in_file(file_path, repo_root=None, dry_run=False):
+def _generate_doxygen_python_or_hash(symbol_name, symbol_kind, comment_clean, doc_relpath, line_num=None, is_python=True, indent=""):
     """!
-    @brief Extract architecture/design comments from a C/C++ source/header file,
-           save them to docs/<relpath_without_ext>.md, and replace in-source with Doxygen.
+    @brief Build Python docstring (\"\"\"! ... \"\"\") or hash-based Doxygen block in English.
+    """
+    summary = _clean_summary(comment_clean)
+    line_ref = f":{line_num}" if line_num else ""
+
+    if is_python:
+        lines = [f'{indent}"""!']
+        lines.append(f"{indent}@brief {summary}.")
+        if doc_relpath:
+            lines.append(f"{indent}@note See `{doc_relpath}{line_ref}` for detailed design rationale.")
+        lines.append(f'{indent}"""')
+    else:
+        lines = [
+            f"{indent}## @brief {summary}.",
+        ]
+        if doc_relpath:
+            lines.append(f"{indent}## @note See `{doc_relpath}{line_ref}` for detailed design rationale.")
+    return "\n".join(lines)
+
+
+def _load_existing_doc_sections(doc_md_abs, repo_root=None, rel_path=None):
+    """!
+    @brief If docs already exist (in root docs/, docs/loader/es, docs/loader/en, etc.),
+           load section quotes so we can restore full context and translate properly.
+    """
+    candidate_paths = [doc_md_abs]
+    if repo_root and rel_path:
+        # Search common doc structures
+        stem = rel_path.stem
+        candidate_paths.extend([
+            repo_root / "docs" / "loader" / "en" / f"{stem}.en.md",
+            repo_root / "docs" / "loader" / "es" / f"{stem}.md",
+            repo_root / "docs" / "loader" / f"{stem}.md",
+            repo_root / "docs" / f"{stem}.md",
+            repo_root / "docs" / rel_path.with_suffix(".md"),
+        ])
+
+    sections = {}
+    pattern = re.compile(r"##\s+(.+?)(?:\s+\((?:l[ií]nea|line)\s+~(\d+)\))?[\r\n]+([\s\S]*?)(?=\n##|\Z)", re.IGNORECASE)
+
+    for path in candidate_paths:
+        if not path or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            idx = 1
+            for m in pattern.finditer(text):
+                title = m.group(1).strip()
+                line_str = m.group(2)
+                line_no = int(line_str) if line_str else (idx * 20)
+                body = m.group(3)
+                quote_lines = []
+                for l in body.splitlines():
+                    if l.startswith(">"):
+                        quote_lines.append(l[1:].strip())
+                if quote_lines:
+                    quote_text = "\n".join(quote_lines).strip()
+                    sections[line_no] = quote_text
+                    clean_title = title.replace("`", "").strip()
+                    sections[clean_title] = quote_text
+                idx += 1
+            if sections:
+                break
+        except Exception:
+            continue
+    return sections
+
+
+def process_comments_in_file(file_path, repo_root=None, dry_run=False):
+    """!
+    @brief Extract architecture/design comments from C/C++/Python/Text source files,
+           save them to docs/<relpath_without_ext>.md, and replace in-source with Doxygen blocks.
+    @param file_path File Path to process.
+    @param repo_root Base repository root for computing relative paths and docs/ output.
+    @param dry_run If True, don't modify files on disk.
+    @return Number of extracted sections.
     """
     if repo_root is None:
         repo_root = file_path.parent
-        # Try to find a git/project root
         curr = file_path.parent
         while curr != curr.parent:
             if (curr / ".git").exists() or (curr / ".psvita-toolkit.json").exists() or (curr / "CMakeLists.txt").exists():
@@ -460,6 +623,11 @@ def process_c_comments_in_file(file_path, repo_root=None, dry_run=False):
         print(f"[-] Error reading {file_path}: {e}")
         return 0
 
+    ext = file_path.suffix.lower()
+    is_c_cpp = ext in (".c", ".h", ".cpp", ".hpp", ".cc", ".cxx")
+    is_py = ext == ".py"
+    is_txt = ext in (".txt", ".cmake", ".sh", ".bash")
+
     lines = content.splitlines(keepends=True)
     try:
         rel = file_path.relative_to(repo_root)
@@ -468,50 +636,75 @@ def process_c_comments_in_file(file_path, repo_root=None, dry_run=False):
 
     doc_md_rel = Path("docs") / rel.with_suffix(".md")
     doc_md_abs = repo_root / doc_md_rel
+    existing_docs = _load_existing_doc_sections(doc_md_abs, repo_root=repo_root, rel_path=rel)
 
     extracted_sections = []
-    # Identify multi-line // comment blocks or /* ... */ blocks
-    # that are not already Doxygen (/** ...)
     i = 0
-    modifications = [] # (start_idx, end_idx, replacement_text)
+    modifications = []  # (start_idx, end_idx, replacement_text)
 
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
 
-        # Check for block comments /* ... */
-        if stripped.startswith("/*") and not stripped.startswith("/**"):
+        # 1. Existing or new C-style block comments /* ... */ (C/C++)
+        if is_c_cpp and (stripped.startswith("/*") or stripped.startswith("/**")):
             start_idx = i
             comment_lines = []
             while i < len(lines):
                 c_line = lines[i].strip()
                 comment_lines.append(c_line)
+                i += 1
                 if "*/" in c_line:
                     break
-                i += 1
-            end_idx = i + 1
+            end_idx = i
 
             raw_text = "\n".join(comment_lines)
             cleaned = re.sub(r"^/\*+|\*+/$", "", raw_text).strip()
             cleaned_lines = [re.sub(r"^\s*\*+\s?", "", l) for l in cleaned.splitlines()]
             cleaned_text = "\n".join(cleaned_lines).strip()
 
-            # If it's descriptive (more than 30 chars or multiple lines)
-            if len(cleaned_text) > 40 and not cleaned_text.startswith("@"):
+            # Check if this was a previous Doxygen block that refers to docs/
+            is_prev_dox = ("@note Ver docs/" in raw_text or "@note See docs/" in raw_text or "@note See `" in raw_text or "@brief" in raw_text)
+            orig_text = None
+            if is_prev_dox:
                 symbol_name, symbol_kind, sig, target_idx = _find_target_symbol(lines, end_idx)
-                dox = _generate_doxygen_c(symbol_name, symbol_kind, cleaned_text, str(doc_md_rel))
-                modifications.append((start_idx, end_idx, dox + "\n"))
-                
-                title = f"`{symbol_name}`" if symbol_name else f"`{file_path.name}` (cabecera/bloque)"
-                sec_md = f"## {title} (línea ~{start_idx + 1})\n\n"
-                sec_md += f"**Archivo:** `{rel}`\n\n"
-                for l in cleaned_lines:
-                    sec_md += f"> {l}\n" if l.strip() else ">\n"
-                sec_md += "\n---\n"
-                extracted_sections.append(sec_md)
+                if symbol_name and symbol_name in existing_docs:
+                    orig_text = existing_docs[symbol_name]
+                else:
+                    for l_no in sorted([k for k in existing_docs.keys() if isinstance(k, int)]):
+                        if abs(l_no - (start_idx + 1)) <= 25:
+                            orig_text = existing_docs[l_no]
+                            break
+                    if not orig_text:
+                        # Extract brief or text from existing doxygen block to translate it
+                        brief_m = re.search(r"@brief\s+(.+?)(?:\*\/|\@|\n|$)", raw_text, re.DOTALL)
+                        if brief_m:
+                            orig_text = brief_m.group(1).replace("*", "").strip()
 
-        # Check for contiguous // comments
-        elif stripped.startswith("//") and not stripped.startswith("///"):
+            target_text = orig_text if orig_text else cleaned_text
+
+            if len(target_text) > 10 and (not target_text.startswith("@") or orig_text):
+                indent_match = re.match(r"^(\s*)", lines[start_idx])
+                indent = indent_match.group(1) if indent_match else ""
+                symbol_name, symbol_kind, sig, target_idx = _find_target_symbol(lines, end_idx)
+                # If it was already a Doxygen block, don't link/generate .md unless new design notes exist
+                ref_doc = str(doc_md_rel) if not is_prev_dox else None
+                dox = _generate_doxygen_c(symbol_name, symbol_kind, target_text, ref_doc, line_num=start_idx + 1, indent=indent)
+                modifications.append((start_idx, end_idx, dox + "\n"))
+
+                if not is_prev_dox:
+                    title = f"`{symbol_name}`" if symbol_name else f"`{file_path.name}` (line ~{start_idx + 1})"
+                    sec_md = f"## {title} (line ~{start_idx + 1})\n\n"
+                    sec_md += f"**Source File:** `{rel}`\n\n"
+                    for l in (orig_text.splitlines() if orig_text else cleaned_lines):
+                        sec_md += f"> {l}\n" if l.strip() else ">\n"
+                    sec_md += "\n---\n"
+                    extracted_sections.append(sec_md)
+
+            i = end_idx
+
+        # 2. Double-slash // comments (C/C++)
+        elif is_c_cpp and stripped.startswith("//") and not stripped.startswith("///"):
             start_idx = i
             comment_lines = []
             while i < len(lines) and lines[i].strip().startswith("//"):
@@ -520,59 +713,141 @@ def process_c_comments_in_file(file_path, repo_root=None, dry_run=False):
             end_idx = i
 
             cleaned_text = "\n".join(comment_lines).strip()
-            if len(cleaned_text) > 40 and not cleaned_text.startswith("@"):
+            if len(cleaned_text) > 30 and not cleaned_text.startswith("@"):
+                indent_match = re.match(r"^(\s*)", lines[start_idx])
+                indent = indent_match.group(1) if indent_match else ""
                 symbol_name, symbol_kind, sig, target_idx = _find_target_symbol(lines, end_idx)
-                dox = _generate_doxygen_c(symbol_name, symbol_kind, cleaned_text, str(doc_md_rel))
+                dox = _generate_doxygen_c(symbol_name, symbol_kind, cleaned_text, str(doc_md_rel), line_num=start_idx + 1, indent=indent)
                 modifications.append((start_idx, end_idx, dox + "\n"))
 
-                title = f"`{symbol_name}`" if symbol_name else f"`{file_path.name}` (línea ~{start_idx + 1})"
-                sec_md = f"## {title}\n\n"
-                sec_md += f"**Archivo:** `{rel}`\n\n"
+                title = f"`{symbol_name}`" if symbol_name else f"`{file_path.name}` (line ~{start_idx + 1})"
+                sec_md = f"## {title} (line ~{start_idx + 1})\n\n"
+                sec_md += f"**Source File:** `{rel}`\n\n"
                 for l in comment_lines:
                     sec_md += f"> {l}\n" if l.strip() else ">\n"
                 sec_md += "\n---\n"
                 extracted_sections.append(sec_md)
+
+            i = end_idx
+
+        # 3. Hash # comments (.py, .txt, .cmake, .sh)
+        elif (is_py or is_txt) and stripped.startswith("#") and not stripped.startswith("#!") and not stripped.startswith("#pragma"):
+            start_idx = i
+            comment_lines = []
+            is_prev_dox = False
+            while i < len(lines) and lines[i].strip().startswith("#"):
+                l_strip = lines[i].strip()
+                if l_strip.startswith("#!"):
+                    break
+                if "## @note See" in l_strip or "## @note Ver" in l_strip or "## @brief" in l_strip:
+                    is_prev_dox = True
+                c_content = re.sub(r"^#+\s?", "", l_strip).strip()
+                comment_lines.append(c_content)
+                i += 1
+            end_idx = i
+
+            cleaned_text = "\n".join(comment_lines).strip()
+            orig_text = None
+            if is_prev_dox:
+                symbol_name, symbol_kind, sig, target_idx = _find_target_symbol(lines, end_idx)
+                if symbol_name and symbol_name in existing_docs:
+                    orig_text = existing_docs[symbol_name]
+                else:
+                    for l_no in sorted([k for k in existing_docs.keys() if isinstance(k, int)]):
+                        if abs(l_no - (start_idx + 1)) <= 25:
+                            orig_text = existing_docs[l_no]
+                            break
+                    if not orig_text:
+                        brief_m = re.search(r"@brief\s+(.+?)(?:@|\n|$)", cleaned_text, re.DOTALL)
+                        if brief_m:
+                            orig_text = brief_m.group(1).replace("#", "").strip()
+
+            target_text = orig_text if orig_text else cleaned_text
+
+            if len(target_text) > 10 and (not target_text.startswith("@") or orig_text):
+                indent_match = re.match(r"^(\s*)", lines[start_idx])
+                indent = indent_match.group(1) if indent_match else ""
+                symbol_name, symbol_kind, sig, target_idx = _find_target_symbol(lines, end_idx)
+                ref_doc = str(doc_md_rel) if not is_prev_dox else None
+                dox = _generate_doxygen_python_or_hash(symbol_name, symbol_kind, target_text, ref_doc, line_num=start_idx + 1, is_python=is_py, indent=indent)
+                modifications.append((start_idx, end_idx, dox + "\n"))
+
+                if not is_prev_dox:
+                    title = f"`{symbol_name}`" if symbol_name else f"`{file_path.name}` (line ~{start_idx + 1})"
+                    sec_md = f"## {title} (line ~{start_idx + 1})\n\n"
+                    sec_md += f"**Source File:** `{rel}`\n\n"
+                    for l in (orig_text.splitlines() if orig_text else comment_lines):
+                        sec_md += f"> {l}\n" if l.strip() else ">\n"
+                    sec_md += "\n---\n"
+                    extracted_sections.append(sec_md)
+
+            i = end_idx
         else:
             i += 1
 
-    if not extracted_sections:
+    if not modifications:
         return 0
 
-    # Write Markdown file
-    doc_md_abs.parent.mkdir(parents=True, exist_ok=True)
-    md_header = f"# `{rel}` — Documentación de diseño\n\n"
-    md_header += "Comentarios explicativos extraídos del código fuente y reemplazados por bloques Doxygen técnicos en el código. Este documento conserva el razonamiento (el \"por qué\") separado de la documentación técnica.\n\n"
-    full_md = md_header + "\n".join(extracted_sections)
+    if dry_run:
+        print(f"\n\033[93m[DRY-RUN] Simulación para: {rel} ({len(modifications)} modificación/es)\033[0m")
+        if extracted_sections:
+            print(f"  \033[96m-> Crearía/actualizaría archivo de diseño: {doc_md_rel} ({len(extracted_sections)} sección/es)\033[0m")
+        for s_idx, e_idx, repl in modifications:
+            print(f"  \033[90mLine ~{s_idx + 1}:\033[0m")
+            for rline in repl.strip().splitlines():
+                print(f"    \033[92m+ {rline}\033[0m")
+    else:
+        if extracted_sections:
+            doc_md_abs.parent.mkdir(parents=True, exist_ok=True)
+            md_header = f"# `{rel}` — Design Architecture & Notes\n\n"
+            md_header += "Explanatory and architectural design notes extracted from source code and replaced with concise technical Doxygen blocks. This document preserves the reasoning ('why') separated from technical API documentation.\n\n"
+            full_md = md_header + "\n".join(extracted_sections)
+            doc_md_abs.write_text(full_md, encoding="utf-8")
+            print(f"[+] Design documentation saved in: {doc_md_rel}")
 
-    if not dry_run:
-        doc_md_abs.write_text(full_md, encoding="utf-8")
-        print(f"[+] Documentación de diseño guardada en: {doc_md_rel}")
-
-        # Apply modifications back-to-front
         for s_idx, e_idx, repl in sorted(modifications, key=lambda x: x[0], reverse=True):
             lines[s_idx:e_idx] = [repl]
 
         file_path.write_text("".join(lines), encoding="utf-8")
-        print(f"[+] Archivo original actualizado con Doxygen: {rel}")
+        print(f"[+] Updated original source file with Doxygen: {rel}")
 
-    return len(extracted_sections)
+    return len(modifications)
 
 
-def extract_comments_command(target_path, dry_run=False):
+# Backward compatibility alias
+process_c_comments_in_file = process_comments_in_file
+
+
+def extract_comments_command(target_path, repo_root=None, dry_run=False):
     target = Path(target_path).resolve()
+    valid_exts = {".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".py", ".txt"}
+
     if target.is_file():
         files = [target]
     else:
-        files = sorted(list(target.rglob("*.c")) + list(target.rglob("*.h")) + list(target.rglob("*.cpp")))
+        files = []
+        for p in target.rglob("*"):
+            if p.is_file() and p.suffix.lower() in valid_exts:
+                files.append(p)
+        files = sorted(files)
 
+    ignored_dirs = {"build", ".git", "__pycache__", "decompiled_so", "decompiled", ".claude", "logs"}
     total = 0
+    if dry_run:
+        print("\n\033[93m" + "=" * 70)
+        print("  MODO SIMULACIÓN (DRY-RUN) ACTIVO — No se modificará ningún archivo")
+        print("=" * 70 + "\033[0m")
+
     for f in files:
-        if f.name.startswith("._") or "build" in f.parts or ".git" in f.parts:
+        if f.name.startswith("._") or any(part in ignored_dirs for part in f.parts):
             continue
-        n = process_c_comments_in_file(f, dry_run=dry_run)
+        n = process_comments_in_file(f, repo_root=repo_root, dry_run=dry_run)
         total += n
 
-    print(f"\n[+] Total de bloques procesados: {total}")
+    if dry_run:
+        print(f"\n\033[93m[DRY-RUN] Simulación completa. Total de bloques que serían modificados: {total}\033[0m")
+    else:
+        print(f"\n[+] Total de bloques procesados: {total}")
 
 
 # ---------------------------------------------------------------------------

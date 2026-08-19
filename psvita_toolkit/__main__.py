@@ -140,6 +140,16 @@ STRINGS = {
         "en": "Local reference assets folder (relative to the project) [assets]: ",
         "pt": "Pasta local de referência de assets (relativa ao projeto) [assets]: ",
     },
+    "main.ask_docs_path": {
+        "es": "Ruta a traducir (archivo o carpeta, relativa o absoluta) [docs]: ",
+        "en": "Path to translate (file or folder, relative or absolute) [docs]: ",
+        "pt": "Caminho a traduzir (arquivo ou pasta, relativo ou absoluto) [docs]: ",
+    },
+    "main.ask_docs_overwrite": {
+        "es": "¿Sobrescribir los archivos originales directamente? (s/N): ",
+        "en": "Overwrite original files in place? (y/N): ",
+        "pt": "Sobrescrever os arquivos originais diretamente? (s/N): ",
+    },
     "main.ask_lang": {
         "es": "Idioma destino (código ISO, ej. en/es/pt) [en]: ",
         "en": "Target language (ISO code, e.g. en/es/pt) [en]: ",
@@ -260,6 +270,15 @@ def _utils_submenu(project_cfg, global_cfg):
         if pattern:
             utils.search_symbols(project_cfg, global_cfg, pattern)
 
+    def do_translate_docs():
+        raw_path = input(t("main.ask_docs_path")).strip()
+        # Strip single/double quotes and extra whitespace (common when drag-and-dropping paths into terminal)
+        target_path = raw_path.strip("'\"") if raw_path else "docs"
+        lang = _ask_lang()
+        overwrite_ans = input(t("main.ask_docs_overwrite")).strip().lower()
+        overwrite = overwrite_ans in ("s", "si", "y", "yes")
+        utils.translate_docs(project_cfg, target_lang=lang, custom_path=target_path, overwrite=overwrite)
+
     items = [
         (t("main.utils.clean_macos_junk"), lambda: utils.clean_macos_junk(project_cfg["_project_dir"])),
         (t("main.utils.decompile_all"), lambda: utils.decompile_all(project_cfg, global_cfg)),
@@ -267,8 +286,8 @@ def _utils_submenu(project_cfg, global_cfg):
         (t("main.utils.search_symbols"), do_search_symbols),
         (t("main.utils.verify_assets"),
          lambda: ftp_ops.verify_data_assets(project_cfg, global_cfg, _ask_reference_dir())),
-        (t("main.utils.translate_docs"), lambda: utils.translate_docs(project_cfg, _ask_lang())),
-        (t("main.utils.gen_docs"), utils.generate_toolkit_docs),
+        (t("main.utils.translate_docs"), do_translate_docs),
+        (t("main.utils.gen_docs"), lambda: utils.generate_toolkit_docs(project_cfg)),
     ]
     if project_cfg.get("slug") == "zenonia-2" or project_cfg.get("titleid") == "PSVZ00002" or "zenonia" in project_cfg.get("game_name", "").lower():
         items.append(("⚔️  " + t("zen2.menu_title"), lambda: zenonia2_tools.zenonia2_menu(project_cfg)))
