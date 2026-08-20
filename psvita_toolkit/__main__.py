@@ -36,6 +36,8 @@ from . import mem_profiler
 from . import monkey_tester
 from . import perf_telemetry
 from . import project
+from . import shader_live_reload
+from . import shader_transpiler
 from . import so_patcher
 from . import tui
 from . import utils
@@ -88,6 +90,16 @@ STRINGS = {
         "es": "Limpiar boilerplate GLES de los .glsl volcados (-> assets/cg/*.cg)",
         "en": "Strip GLES boilerplate from dumped .glsl files (-> assets/cg/*.cg)",
         "pt": "Limpar boilerplate GLES dos .glsl despejados (-> assets/cg/*.cg)",
+    },
+    "main.shaders.transpile_ast": {
+        "es": "Transpilar GLSL -> CG basado en AST (glslangValidator + spirv-cross)",
+        "en": "AST-based GLSL -> CG transpile (glslangValidator + spirv-cross)",
+        "pt": "Transpilar GLSL -> CG baseado em AST (glslangValidator + spirv-cross)",
+    },
+    "main.shaders.live_reload": {
+        "es": "Live Reload: vigilar assets/cg/ y auto-subir al guardar",
+        "en": "Live Reload: watch assets/cg/ and auto-upload on save",
+        "pt": "Live Reload: vigiar assets/cg/ e auto-enviar ao salvar",
     },
     "main.shaders.gen_uniforms": {
         "es": "Generar esqueletos de uniforms/samplers en C (desde glsl_dump/)",
@@ -362,6 +374,8 @@ def _shaders_submenu(project_cfg, global_cfg):
         (t("main.shaders.sync"), lambda: ftp_ops.sync_shaders(project_cfg, global_cfg)),
         (t("main.shaders.download_glsl"), lambda: ftp_ops.download_glsl_shaders(project_cfg, global_cfg)),
         (t("main.shaders.clean_boilerplate"), lambda: utils.translate_shaders_boilerplate(project_cfg)),
+        (t("main.shaders.transpile_ast"), lambda: shader_transpiler.transpiler_menu(project_cfg, global_cfg)),
+        (t("main.shaders.live_reload"), lambda: shader_live_reload.live_reload_menu(project_cfg, global_cfg)),
         (t("main.shaders.gen_uniforms"), lambda: utils.generate_uniform_skeletons(project_cfg)),
         (t("main.shaders.validate"), lambda: utils.validate_all_shaders(project_cfg, global_cfg)),
         (t("main.shaders.upload_cg"), lambda: ftp_ops.upload_cg_shaders(project_cfg, global_cfg)),

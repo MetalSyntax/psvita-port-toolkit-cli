@@ -142,11 +142,13 @@ psvita_toolkit/
   dashboard.py        # web dashboard local (logs, estado, crashes, assets, touch mapper, perf)
   ecosystem.py        # vista multi-port y sincronización de componentes compartidos
   context_feeder.py   # exportador de contexto de crash para copilotos de IA
-  gdb_bridge.py       # exportador de mapa de símbolos para gdb-multiarch (consola real)
-  asset_transcoder.py # texturas .rawtex + mipmaps (con compresión GPU real si hay encoder) + audio .at9 en lote
-  perf_telemetry.py   # frame-pacing + muestreo de cores en vivo (UDP, consola real)
-  monkey_tester.py    # soak test con heartbeat (UDP, consola real) + hooks de entrada aleatoria
+  gdb_bridge.py       # mapa de símbolos para gdb-multiarch + captura automática de la base del .so (UDP)
+  asset_transcoder.py # texturas .rawtex + mipmaps + loader C real (sceGxmTextureInitLinear) + audio .at9 en lote
+  perf_telemetry.py   # frame-pacing + GPU sync real (sceGxmFinish) + cores en vivo (UDP, consola real)
+  monkey_tester.py    # soak test con heartbeat + sesión combinada con el Profiler de Memoria
   auto_synth.py       # bootstrap asistido: build + deploy + crash-check loop en consola real
+  shader_transpiler.py   # GLSL -> CG basado en AST real (glslangValidator + spirv-cross)
+  shader_live_reload.py  # auto-subir shaders .cg por FTP al guardar
 ```
 
 ## Modo headless (CLI sin TUI)
@@ -167,12 +169,15 @@ psvita-toolkit align-check --project <ruta>                         # riesgos de
 psvita-toolkit mem-profile --project <ruta>                         # escuchar heap en vivo (consola real)
 psvita-toolkit mem-profile --project <ruta> --gen-hooks              # generar mem_profiler_hooks.c/.h
 psvita-toolkit web --project <ruta>                                  # dashboard local en el navegador
-psvita-toolkit gdb-map --project <ruta>                              # script .gdb para gdb-multiarch
-psvita-toolkit transcode-assets --project <ruta> --textures-dir assets --audio-dir assets/sfx
-psvita-toolkit perf-telemetry --project <ruta>                       # escuchar frame-pacing en vivo
+psvita-toolkit gdb-map --project <ruta> --watch-base                 # captura la base del .so por UDP sola
+psvita-toolkit transcode-assets --project <ruta> --textures-dir assets --audio-dir assets/sfx --gen-loader
+psvita-toolkit perf-telemetry --project <ruta>                       # escuchar frame-pacing (+ GPU sync) en vivo
 psvita-toolkit perf-telemetry --project <ruta> --gen-hooks            # generar perf_telemetry_hooks.c/.h
-psvita-toolkit soak-test --project <ruta>                            # escuchar heartbeat de soak test
+psvita-toolkit soak-test --project <ruta> --with-mem-profile           # heartbeat + Profiler de Memoria juntos
 psvita-toolkit auto-bootstrap --project <ruta>                       # bootstrap asistido en consola real
+psvita-toolkit so-patch --project <ruta> --apply-patch 0x812a4f10 --so juego.so  # parche binario real (dirección confirmada a mano)
+psvita-toolkit shader-transpile --dump-dir glsl_dump --out-dir assets/cg  # GLSL -> CG basado en AST
+psvita-toolkit shader-live-reload --project <ruta>                   # auto-subir .cg al guardar
 ```
 
 `--project` por defecto es el directorio actual. Cada subcomando devuelve código de salida `0`

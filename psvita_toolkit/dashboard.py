@@ -37,10 +37,17 @@ Six independent things, each its own tab in the single-page dashboard:
    as live logs, fanning FRAME/CORES samples out over `/ws/perf` for a
    rolling FPS readout -- see `perf_telemetry.py` for why there's no GPU
    counter here.
+7. LiveArea preview -- `/api/livearea/preview`: serves
+   `livearea.render_preview_composite()`'s PNG, a real-size-relative
+   side-by-side of the four LiveArea assets. Deliberately NOT a WYSIWYG
+   editor for template.xml layouts -- see `livearea.render_preview_composite()`'s
+   own docstring for why this project has no confirmed schema to build one
+   against.
 """
 
 import base64
 import hashlib
+import io
 import json
 import socket
 import threading
@@ -501,6 +508,16 @@ def _make_handler(project_cfg, global_cfg, broadcaster, perf_broadcaster):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+            elif self.path == "/api/livearea/preview":
+                dest_dir = Path(project_cfg["_project_dir"]) / "extras" / "livearea"
+                buf = io.BytesIO()
+                livearea.render_preview_composite(dest_dir).save(buf, format="PNG")
+                data = buf.getvalue()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
             else:
                 self.send_error(404)
 
@@ -640,6 +657,7 @@ _DASHBOARD_HTML = """<!doctype html>
     <button data-tab="assets">Assets</button>
     <button data-tab="touch">Touch Mapper</button>
     <button data-tab="perf">Performance</button>
+    <button data-tab="livearea">LiveArea Preview</button>
   </nav>
 </header>
 <main>
@@ -691,17 +709,29 @@ _DASHBOARD_HTML = """<!doctype html>
 
   <section class="tab" id="tab-perf">
     <div class="panel">
-      <p style="color:var(--dim);margin-top:0;">Frame time from the real console (no GPU vertex/fillrate
-      counters -- there's no public vitasdk API exposing those; frame time is the honest, actually
-      available signal for frame-pacing). Requires the game to call perf_telemetry_frame_begin()/_end()
-      -- see the Utilities menu to generate the hooks.</p>
-      <div style="display:flex;gap:24px;margin-bottom:10px;">
+      <p style="color:var(--dim);margin-top:0;">Frame time from the real console (no fabricated GPU vertex/fillrate
+      counter -- there's no public vitasdk API exposing those). GPU sync time below is real: it's how long
+      sceGxmFinish() blocks, opt-in via perf_telemetry_gpu_sync_and_measure() in profiling builds only.
+      Requires the game to call perf_telemetry_frame_begin()/_end() -- see the Utilities menu to generate the hooks.</p>
+      <div style="display:flex;gap:24px;margin-bottom:10px;flex-wrap:wrap;">
         <div><span style="color:var(--dim);">FPS (avg, last 120)</span><div id="perf-fps" style="font-size:28px;font-weight:600;">--</div></div>
         <div><span style="color:var(--dim);">Frame p95</span><div id="perf-p95" style="font-size:28px;font-weight:600;">--</div></div>
         <div><span style="color:var(--dim);">Stutters</span><div id="perf-stutters" style="font-size:28px;font-weight:600;">--</div></div>
+        <div><span style="color:var(--dim);">GPU sync (avg, sceGxmFinish)</span><div id="perf-gpu" style="font-size:28px;font-weight:600;">--</div></div>
       </div>
       <canvas id="perf-canvas" width="960" height="160" style="width:100%;background:#010409;border:1px solid var(--border);border-radius:6px;"></canvas>
       <div style="margin-top:10px;color:var(--dim);font-size:12px;">Cores (best-effort sample, current thread id per core): <span id="perf-cores">--</span></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-livearea">
+    <div class="panel">
+      <p style="color:var(--dim);margin-top:0;">bg0/pic0/icon0/startup from <code>extras/livearea/</code>, each scaled by
+      the SAME factor so relative real-world sizes stay honest. This is NOT a composited "what the LiveArea
+      screen will look like" mockup -- there's no confirmed spec for the real OS's bg0/pic0 z-order to build
+      one against (see livearea.py's dev-notes). Refresh after re-converting an asset.</p>
+      <img id="livearea-preview-img" src="/api/livearea/preview" style="max-width:100%;border:1px solid var(--border);border-radius:6px;">
+      <div style="margin-top:10px;"><button class="act" onclick="document.getElementById('livearea-preview-img').src='/api/livearea/preview?'+Date.now()">Refresh</button></div>
     </div>
   </section>
 </main>
@@ -869,6 +899,7 @@ drawCanvas();
 
 // ---- Performance ----
 let frameTimesUs = [];
+let gpuTimesUs = [];
 const perfCanvas = document.getElementById("perf-canvas");
 const perfCtx = perfCanvas.getContext("2d");
 
@@ -920,6 +951,11 @@ function connectPerf() {
       drawPerfGraph();
     } else if (sample.kind === "CORES") {
       document.getElementById("perf-cores").textContent = sample.value.join(", ");
+    } else if (sample.kind === "GPU") {
+      gpuTimesUs.push(sample.value);
+      if (gpuTimesUs.length > 120) gpuTimesUs = gpuTimesUs.slice(-120);
+      const avgGpuMs = gpuTimesUs.reduce((a, b) => a + b, 0) / gpuTimesUs.length / 1000;
+      document.getElementById("perf-gpu").textContent = avgGpuMs.toFixed(2) + " ms";
     }
   };
 }

@@ -149,7 +149,7 @@ def _session_log_path(project_cfg):
     return logs_dir / f"mem_profile_{stamp}.log"
 
 
-def run_memory_profiler(project_cfg, port=DEFAULT_PORT, summary_every=50):
+def run_memory_profiler(project_cfg, port=DEFAULT_PORT, summary_every=50, stop_event=None):
     """!
     @brief Listen for UDP alloc/free/checkpoint events and maintain a live
            heap summary until interrupted.
@@ -157,6 +157,12 @@ def run_memory_profiler(project_cfg, port=DEFAULT_PORT, summary_every=50):
     @param port UDP port to bind to (all interfaces).
     @param summary_every Print a heap summary line every this many processed
            events (in addition to the final one on exit).
+    @param stop_event Optional `threading.Event` -- when set, the loop exits
+           cleanly (same as Ctrl+C) on its next ~1s poll. Lets
+           `monkey_tester.run_combined_soak_session()` run this on a
+           background thread and still shut it down from the main thread
+           (background threads never receive `KeyboardInterrupt` directly).
+           `None` (default) preserves the original Ctrl+C-only behavior.
     @note Leak heuristic: every live allocation remembers the tag of the most
           recent `CHECKPOINT` event that had already happened when it was
           allocated. On exit (or when asked), anything still live whose
@@ -170,6 +176,7 @@ def run_memory_profiler(project_cfg, port=DEFAULT_PORT, summary_every=50):
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.settimeout(1.0)
     try:
         sock.bind(("0.0.0.0", port))
     except OSError as e:
@@ -200,8 +207,11 @@ def run_memory_profiler(project_cfg, port=DEFAULT_PORT, summary_every=50):
 
     try:
         with open(log_path, "a", encoding="utf-8") as logf:
-            while True:
-                data, addr = sock.recvfrom(65536)
+            while not (stop_event and stop_event.is_set()):
+                try:
+                    data, addr = sock.recvfrom(65536)
+                except socket.timeout:
+                    continue
                 text = data.decode("utf-8", errors="replace").strip()
                 if not text:
                     continue

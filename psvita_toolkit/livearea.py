@@ -19,7 +19,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from . import i18n
 from .i18n import t
@@ -323,6 +323,11 @@ STRINGS = {
         "en": "missing -- doesn't exist in the directory",
         "pt": "faltando -- não existe no diretório",
     },
+    "livearea.preview_missing": {
+        "es": "(falta)",
+        "en": "(missing)",
+        "pt": "(faltando)",
+    },
     "livearea.validate_too_big": {
         "es": "{size_kb:.1f} KB supera el límite de {max_kb} KB -- vita-pack-vpk podría rechazarlo",
         "en": "{size_kb:.1f} KB exceeds the {max_kb} KB limit -- vita-pack-vpk might reject it",
@@ -539,6 +544,74 @@ def convert_bgm_to_at9(input_path, dest_dir, global_cfg=None):
         return None
     print(f"  [+] {t('livearea.bgm_saved', out_file=out_file)}")
     return out_file
+
+
+# ---------------------------------------------------------------------------
+# Visual preview (WYSIWYG-adjacent, honestly scoped -- see docs/dev-notes/livearea.md)
+# ---------------------------------------------------------------------------
+
+_PREVIEW_BG = (13, 17, 23)
+_PREVIEW_PANEL_OUTLINE = (48, 54, 61)
+_PREVIEW_TEXT = (201, 209, 217)
+_PREVIEW_MISSING_TEXT = (110, 118, 129)
+_PREVIEW_PANEL_SIZE = (300, 300)
+_PREVIEW_LABEL_HEIGHT = 20
+
+
+def render_preview_composite(dest_dir):
+    """!
+    @brief Render all four LiveArea assets side by side, each scaled by the
+           SAME factor (so relative real-world sizes stay honest -- `icon0`
+           visibly small next to `pic0`, not independently stretched to look
+           similar), for a quick visual sanity check before packaging.
+    @details Deliberately does NOT attempt to composite `bg0`+`pic0` into a
+           single "this is what the LiveArea screen will look like" mockup:
+           this project has no confirmed source for the real Vita OS's exact
+           z-order/positioning between those two layers (see
+           `docs/dev-notes/livearea.md` for why `generate_template_xml()`
+           itself only ever emits the one confirmed "gate" style) -- guessing
+           at that composite would risk showing something that looks
+           plausible but isn't what the console actually renders. Four
+           separate, correctly-scaled panels is the honest version of
+           "visual preview" this toolkit can actually back up.
+    @param dest_dir Project's `extras/livearea/` directory.
+    @return `PIL.Image` (RGB) ready to save or serve as PNG bytes.
+    """
+    dest_dir = Path(dest_dir)
+    specs = list(VITA_SPECS.values())
+    max_w = max(spec["width"] for spec in specs)
+    max_h = max(spec["height"] for spec in specs)
+    inner_w = _PREVIEW_PANEL_SIZE[0] - 16
+    inner_h = _PREVIEW_PANEL_SIZE[1] - _PREVIEW_LABEL_HEIGHT - 16
+    scale = min(inner_w / max_w, inner_h / max_h)
+
+    canvas_w = _PREVIEW_PANEL_SIZE[0] * len(specs)
+    canvas_h = _PREVIEW_PANEL_SIZE[1]
+    canvas = Image.new("RGB", (canvas_w, canvas_h), _PREVIEW_BG)
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+
+    for i, spec in enumerate(specs):
+        x0 = i * _PREVIEW_PANEL_SIZE[0]
+        label = f"{spec['filename']} ({spec['width']}x{spec['height']})"
+        draw.text((x0 + 8, 4), label, font=font, fill=_PREVIEW_TEXT)
+
+        w, h = max(1, round(spec["width"] * scale)), max(1, round(spec["height"] * scale))
+        px = x0 + (_PREVIEW_PANEL_SIZE[0] - w) // 2
+        py = _PREVIEW_LABEL_HEIGHT + (canvas_h - _PREVIEW_LABEL_HEIGHT - h) // 2
+
+        fpath = dest_dir / spec["filename"]
+        if fpath.exists():
+            try:
+                asset_img = Image.open(fpath).convert("RGB").resize((w, h))
+                canvas.paste(asset_img, (px, py))
+            except OSError:
+                draw.rectangle([px, py, px + w, py + h], outline=_PREVIEW_PANEL_OUTLINE)
+        else:
+            draw.rectangle([px, py, px + w, py + h], outline=_PREVIEW_PANEL_OUTLINE)
+            draw.text((px + 4, py + 4), t("livearea.preview_missing"), font=font, fill=_PREVIEW_MISSING_TEXT)
+
+    return canvas
 
 
 # ---------------------------------------------------------------------------

@@ -35,8 +35,26 @@ full AI-copilot context bundle via `context_feeder.py` -- as soon as: the
 build fails, no new dump appears (looks stable), the SAME crash signature
 repeats (no measurable progress), or `max_iterations` is reached. See
 `docs/dev-notes/auto_synth.md`.
+
+Two efficiency improvements on top of that core loop, both real and bounded
+(neither adds any new autonomy claim):
+1. `_wait_and_check_for_crash()` polls the console a few times across the
+   wait window instead of sleeping the FULL `run_seconds` before checking
+   once -- an iteration whose crash happens quickly moves on immediately
+   instead of always paying the full wait. Deliberately capped at a small,
+   fixed number of checks (not "check every second"): `ftp_ops.py` already
+   documents VitaShell's ftpd occasionally refusing a connection attempt
+   made right after a previous one just closed, so hammering it with rapid
+   reconnects would trade a speed gain for flakiness.
+2. `_check_stubs_wired_into_build()` reads the project's `CMakeLists.txt`
+   once at the start and reports whether it already globs the directory
+   `jni_analyzer.py`/`so_patcher.py` write candidate stubs into -- if so, a
+   regenerated stub is genuinely picked up by the NEXT build automatically;
+   if not, the porter still needs to add it to `CMakeLists.txt` by hand.
+   Reported honestly either way, not assumed.
 """
 
+import re
 import time
 from pathlib import Path
 
@@ -88,9 +106,24 @@ STRINGS = {
         "pt": "[-] Iteração {n}: o build não produziu nenhum .vpk.",
     },
     "auto_synth.waiting": {
-        "es": "[*] Esperando {seconds}s a que el juego arranque/corra en la consola real...",
-        "en": "[*] Waiting {seconds}s for the game to boot/run on the real console...",
-        "pt": "[*] Esperando {seconds}s para o jogo iniciar/rodar no console real...",
+        "es": "[*] Esperando hasta {seconds}s a que el juego arranque/corra (chequeos parciales, no espera ciega)...",
+        "en": "[*] Waiting up to {seconds}s for the game to boot/run (polled in parts, not a blind wait)...",
+        "pt": "[*] Esperando até {seconds}s para o jogo iniciar/rodar (verificações parciais, não é espera cega)...",
+    },
+    "auto_synth.stubs_wired_yes": {
+        "es": "[i] CMakeLists.txt ya incluye 'source/*.c' -- un stub regenerado se recompila solo en la próxima build.",
+        "en": "[i] CMakeLists.txt already globs 'source/*.c' -- a regenerated stub gets rebuilt automatically next iteration.",
+        "pt": "[i] CMakeLists.txt já inclui 'source/*.c' -- um stub regenerado é recompilado automaticamente na próxima build.",
+    },
+    "auto_synth.stubs_wired_no": {
+        "es": "[!] CMakeLists.txt no parece incluir 'source/*.c' -- los stubs regenerados no se recompilan solos, hay que agregarlos a mano.",
+        "en": "[!] CMakeLists.txt doesn't appear to glob 'source/*.c' -- regenerated stubs won't be rebuilt automatically, they need adding by hand.",
+        "pt": "[!] CMakeLists.txt não parece incluir 'source/*.c' -- os stubs regenerados não são recompilados automaticamente, é preciso adicioná-los manualmente.",
+    },
+    "auto_synth.stubs_wired_unknown": {
+        "es": "[?] No se encontró CMakeLists.txt -- no se pudo chequear si los stubs regenerados se recompilan solos.",
+        "en": "[?] No CMakeLists.txt found -- couldn't check whether regenerated stubs get rebuilt automatically.",
+        "pt": "[?] Nenhum CMakeLists.txt encontrado -- não foi possível verificar se os stubs regenerados são recompilados automaticamente.",
     },
     "auto_synth.looks_stable": {
         "es": "[+] Iteración {n}: no apareció ningún crash dump nuevo tras {seconds}s -- parece estable.",
@@ -174,6 +207,65 @@ def _crash_signature(dump_path):
     return crash_instruction
 
 
+def _wait_and_check_for_crash(project_cfg, global_cfg, run_seconds, last_seen_dump, checks=3):
+    """!
+    @brief Poll the console up to `checks` times across `run_seconds`
+           instead of sleeping the whole window before one single check --
+           returns as soon as a NEW dump shows up.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict.
+    @param run_seconds Total seconds to spend waiting, across all checks.
+    @param last_seen_dump The dump filename to compare against (whatever was
+           there before this wait started).
+    @param checks How many times to poll at most. Deliberately small and
+           fixed -- see the module docstring for why this doesn't poll
+           every second.
+    @return The latest remote dump filename as of the last check performed
+           (may still equal `last_seen_dump` if nothing new ever showed up).
+    """
+    interval = max(run_seconds / checks, 5)
+    elapsed = 0.0
+    latest_name = last_seen_dump
+    while elapsed < run_seconds:
+        sleep_for = min(interval, run_seconds - elapsed)
+        time.sleep(sleep_for)
+        elapsed += sleep_for
+        latest_name = _latest_remote_dump_name(project_cfg, global_cfg)
+        if latest_name is not None and latest_name != last_seen_dump:
+            break
+    return latest_name
+
+
+_GLOB_KEYWORD_RE = re.compile(r'\bGLOB(_RECURSE)?\b', re.IGNORECASE)
+_SOURCE_GLOB_PATTERN_RE = re.compile(r'source[/\\]\*\.c\b')
+
+
+def _check_stubs_wired_into_build(project_dir):
+    """!
+    @brief Best-effort check of whether `CMakeLists.txt` already globs the
+           directory `jni_analyzer.py`/`so_patcher.py` write candidate stubs
+           into (`<project_dir>/source/*.c`) -- if so, a regenerated stub is
+           genuinely picked up by the next build with no further action; if
+           not, the porter still has to add it to `CMakeLists.txt` by hand.
+    @details Deliberately loose (checks for CMake's `GLOB`/`GLOB_RECURSE`
+           keyword and a literal `source/*.c` pattern appearing ANYWHERE in
+           the file, not that they're part of the same `file(...)` call) --
+           a real CMake parser would be needed to check that precisely, and
+           a false "yes" here just means the porter double-checks something
+           that was already fine, while a false "no" means they add a line
+           that was already unnecessary. Neither is a dangerous outcome, so
+           the loose heuristic is worth the simplicity.
+    @param project_dir Path to the port's project directory.
+    @return `True`/`False` if `CMakeLists.txt` exists and was checked, or
+           `None` if there's no `CMakeLists.txt` to check at all (can't tell).
+    """
+    cmake_path = Path(project_dir) / "CMakeLists.txt"
+    if not cmake_path.exists():
+        return None
+    text = cmake_path.read_text(encoding="utf-8", errors="ignore")
+    return bool(_GLOB_KEYWORD_RE.search(text) and _SOURCE_GLOB_PATTERN_RE.search(text))
+
+
 def _write_report(project_cfg, lines):
     """!
     @brief Append a `## Auto-Synthesizer report` section to `PORTING_PLAN.md`,
@@ -215,6 +307,16 @@ def run_auto_bootstrap(project_cfg, global_cfg, max_iterations=DEFAULT_MAX_ITERA
     last_seen_dump = _latest_remote_dump_name(project_cfg, global_cfg)
     last_signature = None
 
+    stubs_wired = _check_stubs_wired_into_build(project_dir)
+    if stubs_wired is True:
+        msg = t("auto_synth.stubs_wired_yes")
+    elif stubs_wired is False:
+        msg = t("auto_synth.stubs_wired_no")
+    else:
+        msg = t("auto_synth.stubs_wired_unknown")
+    print(f"{C.DIM}{msg}{C.RESET}")
+    report.append(msg)
+
     for i in range(1, max_iterations + 1):
         print(t("auto_synth.iteration_header", n=i, max_n=max_iterations))
 
@@ -240,9 +342,8 @@ def run_auto_bootstrap(project_cfg, global_cfg, max_iterations=DEFAULT_MAX_ITERA
             ftp_ops.upload_eboot(project_cfg, global_cfg, assume_yes=True)
 
         print(t("auto_synth.waiting", seconds=run_seconds))
-        time.sleep(run_seconds)
+        latest_name = _wait_and_check_for_crash(project_cfg, global_cfg, run_seconds, last_seen_dump)
 
-        latest_name = _latest_remote_dump_name(project_cfg, global_cfg)
         if latest_name is None or latest_name == last_seen_dump:
             # Either no dump at all, or the same one that was already there
             # before this check -- either way, nothing NEW crashed.

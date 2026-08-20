@@ -68,6 +68,11 @@ STRINGS = {
         "en": "none found (optional) -- asset_transcoder.py still works (uncompressed .rawtex), but no real GPU compression without PVRTexToolCLI/compressonatorcli",
         "pt": "nenhum encontrado (opcional) -- asset_transcoder.py continua funcionando (.rawtex sem compressão), mas sem compressão GPU real sem PVRTexToolCLI/compressonatorcli",
     },
+    "doctor.hint.shader_transpiler_tool_missing": {
+        "es": "no encontrado -- necesario para shader_transpiler.py (brew install glslang / spirv-cross); sin ambos, solo queda la limpieza por regex de utils.py",
+        "en": "not found -- needed for shader_transpiler.py (brew install glslang / spirv-cross); without both, only utils.py's regex cleanup is available",
+        "pt": "não encontrado -- necessário para shader_transpiler.py (brew install glslang / spirv-cross); sem ambos, só resta a limpeza por regex de utils.py",
+    },
     "doctor.section.decompilers": {
         "es": "Decompiladores",
         "en": "Decompilers",
@@ -376,12 +381,16 @@ def _check_jadx():
 
 def _check_v4_tools():
     """!
-    @brief Verify the optional external tools `gdb_bridge.py`/`asset_transcoder.py`
-           can make use of (`gdb-multiarch`, `PVRTexToolCLI`/`compressonatorcli`).
-    @details All WARN, never FAIL -- both modules degrade gracefully without
-           these (a `.gdb` script is still written even with no local
-           `gdb-multiarch` to run it with; `.rawtex` textures are always
-           produced even with no GPU-compression backend present).
+    @brief Verify the optional external tools `gdb_bridge.py`/`asset_transcoder.py`/
+           `shader_transpiler.py` can make use of (`gdb-multiarch`,
+           `PVRTexToolCLI`/`compressonatorcli`, `glslangValidator`+`spirv-cross`).
+    @details All WARN, never FAIL -- every one of these modules degrades
+           gracefully without them (a `.gdb` script is still written even
+           with no local `gdb-multiarch`; `.rawtex` textures are always
+           produced even with no GPU-compression backend; the shader
+           transpiler is the one exception that can't do anything useful
+           without BOTH `glslangValidator` and `spirv-cross` -- there's no
+           fallback pipeline, only `utils.py`'s older regex-based cleanup).
     @return list of check tuples.
     """
     checks = []
@@ -397,6 +406,12 @@ def _check_v4_tools():
             break
     else:
         checks.append(_check("PVRTexToolCLI/compressonatorcli", WARN, t("doctor.hint.texture_encoder_missing")))
+
+    for name in ("glslangValidator", "spirv-cross"):
+        found = shutil.which(name)
+        checks.append(_check(name, OK if found else WARN,
+                              t("doctor.detail.found_at", path=found) if found
+                              else t("doctor.hint.shader_transpiler_tool_missing", name=name)))
     return checks
 
 

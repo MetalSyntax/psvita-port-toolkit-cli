@@ -31,6 +31,21 @@ file LiveArea can't actually decode) -- a clear "here's why, here's what to get"
 byte-identical-looking-but-broken output file. If the input is already `.at9`, it's just copied
 through as-is (no encoder needed).
 
+## Why `render_preview_composite()` shows four separate panels instead of one composited mockup
+
+The plan's WYSIWYG item asked for a preview rendered "with the real overlay of the PS Vita OS
+interface" -- i.e. show bg0 and pic0 layered together the way the console actually renders the
+LiveArea "gate" screen. This project has no confirmed source for that exact z-order/positioning
+(the same gap documented above for why `generate_template_xml()` only emits the one verified
+style) -- Sony's real compositing behavior between those two layers isn't publicly specified
+anywhere this toolkit could check it against. Guessing a plausible-looking layered composite
+would risk showing something that looks like a real preview but isn't what the console actually
+draws -- worse than not showing a composite at all. Four panels, each asset at its own correct
+size relative to the others (same scale factor across all four, so `icon0` visibly reads as much
+smaller than `pic0` rather than being independently stretched to look similar), is the honest
+version of "visual preview" available without that missing piece of information. If a future port
+confirms the real layering on hardware, that's the point to build the composited version.
+
 ## Where this came from
 
 This module is `convert_livearea.py` (a previously-standalone script) folded into the toolkit.

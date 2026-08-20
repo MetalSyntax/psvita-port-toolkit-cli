@@ -22,6 +22,25 @@ porter might have installed. The generated comment says exactly that, and says t
 delete the whole function if it doesn't compile -- frame-time telemetry works completely
 independently of it.
 
+## Why `perf_telemetry_gpu_sync_and_measure()` times `sceGxmFinish()` instead of staying silent on GPU
+
+The module originally declined a GPU signal entirely, since vertex/fillrate counters aren't
+exposed to homebrew. But `sceGxmFinish()` -- a full pipeline flush, one of the most fundamental
+and commonly-used GXM calls -- gives a REAL, if coarse, measurement: how long the CPU waits for
+the GPU to finish everything submitted so far. That's not identical to "GPU-only busy time" (it
+also includes submission overhead, and forces a stall that wouldn't otherwise happen), but it's
+a genuine measurement of real GPU work completing, not a fabricated number -- worth exposing as
+long as the trade-off is stated plainly, which is why the generated function is explicitly
+commented "profiling builds only, not necessarily every frame".
+
+## Why the frame-pacing report gets written to `PORTING_PLAN.md`, not just printed
+
+A live session's console output disappears the moment the terminal closes. The plan's own
+framing for this feature was about DECIDING whether a port has reached "a stable 60 FPS" --
+that's a decision worth having a persisted record of (percentiles, stutter count, GPU sync
+average if any), the same reasoning `mem_align_analyzer.py`/`so_patcher.py` already apply to
+their own findings.
+
 ## Why frame-pacing analysis (p95, stutter count) uses a fixed 2x-average threshold
 
 A stutter is fundamentally "this frame took much longer than its neighbors", and the game's own

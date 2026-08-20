@@ -17,7 +17,7 @@ frame time regardless of whether there's a dedicated GPU counter behind it,
 so frame-pacing analysis (jitter, dropped-frame detection) stands on its own
 as a genuinely actionable metric.
 
-Two independent signals, same UDP-line wire convention as
+Three independent signals, same UDP-line wire convention as
 `debugnet_server.py`/`mem_profiler.py`:
 1. `FRAME,<microseconds>` -- one per frame, timed with `sceKernelGetProcessTimeWide()`
    around the porter's own render+present call (`generate_perf_hooks()`'s
@@ -30,6 +30,15 @@ Two independent signals, same UDP-line wire convention as
    `docs/dev-notes/perf_telemetry.md` for why, and why the generated hook
    for it is explicitly marked "verify against your vitasdk headers" rather
    than asserted correct.
+3. `GPU,<microseconds>` -- a REAL (not fabricated) GPU-completion measurement:
+   `perf_telemetry_gpu_sync_and_measure()` times how long `sceGxmFinish()`
+   blocks. That's not a vertex/fillrate counter (still not exposed to
+   homebrew), but it IS the GPU actually finishing real submitted work --
+   `sceGxmFinish()` forces a full pipeline flush, so the wait time
+   correlates with genuine GPU load. The honest cost: calling it forces
+   that stall, which is a real (if standard) profiling trade-off -- see
+   `docs/dev-notes/perf_telemetry.md` for why the generated hook is opt-in
+   and explicitly marked "profiling builds only".
 """
 
 import socket
@@ -102,15 +111,16 @@ def _parse_sample(text):
     """!
     @brief Parse one wire-format line.
     @param text Decoded UDP datagram text (already stripped).
-    @return `("FRAME", frame_time_us)`, `("CORES", (t0, t1, t2, t3))`, or
-            `None` if the line doesn't match either shape.
+    @return `("FRAME", frame_time_us)`, `("GPU", gpu_sync_time_us)`,
+            `("CORES", (t0, t1, t2, t3))`, or `None` if the line doesn't
+            match any of those shapes.
     """
     parts = text.split(",")
     if not parts:
         return None
     kind = parts[0].strip().upper()
     try:
-        if kind == "FRAME" and len(parts) == 2:
+        if kind in ("FRAME", "GPU") and len(parts) == 2:
             return kind, int(parts[1])
         if kind == "CORES" and len(parts) == 5:
             return kind, tuple(int(p) for p in parts[1:])
@@ -158,6 +168,7 @@ def run_perf_telemetry(project_cfg, port=DEFAULT_PORT, summary_every=120, on_sam
     print(f"{C.DIM}{t('perf_telemetry.stop_hint')}{C.RESET}")
 
     frame_times_us = []
+    gpu_times_us = []
     count = 0
 
     def _print_summary():
@@ -190,6 +201,8 @@ def run_perf_telemetry(project_cfg, port=DEFAULT_PORT, summary_every=120, on_sam
                     frame_times_us.append(value)
                     if count % summary_every == 0:
                         _print_summary()
+                elif kind == "GPU":
+                    gpu_times_us.append(value)
 
                 if on_sample:
                     try:
@@ -202,6 +215,48 @@ def run_perf_telemetry(project_cfg, port=DEFAULT_PORT, summary_every=120, on_sam
         sock.close()
         _print_summary()
         print(f"{C.GREEN}{t('perf_telemetry.session_ended', count=count, log_path=log_path)}{C.RESET}")
+        _write_session_report(project_cfg, frame_times_us, gpu_times_us)
+
+
+def _write_session_report(project_cfg, frame_times_us, gpu_times_us):
+    """!
+    @brief Append a `## Performance telemetry session` section to
+           `PORTING_PLAN.md` -- FPS/frame-pacing percentiles, and
+           `sceGxmFinish()` GPU-sync timing if any arrived. Same
+           append-if-exists-else-skip pattern as `so_patcher.py`/
+           `mem_align_analyzer.py`.
+    @param project_cfg Per-project config dict.
+    @param frame_times_us All `FRAME` samples from this session.
+    @param gpu_times_us All `GPU` samples from this session.
+    """
+    if not frame_times_us:
+        return
+    plan_path = Path(project_cfg["_project_dir"]) / "PORTING_PLAN.md"
+    if not plan_path.exists():
+        return
+
+    sorted_frames = sorted(frame_times_us)
+    avg_us = sum(frame_times_us) / len(frame_times_us)
+    p50_ms = sorted_frames[len(sorted_frames) // 2] / 1000
+    p95_ms = sorted_frames[int(len(sorted_frames) * 0.95)] / 1000
+    p99_ms = sorted_frames[int(len(sorted_frames) * 0.99)] / 1000
+    fps = 1_000_000 / avg_us if avg_us else 0.0
+    stutters = sum(1 for v in frame_times_us if v > avg_us * 2)
+
+    lines = ["", "## Performance telemetry session (psvita-toolkit)", "",
+             f"{len(frame_times_us)} frame(s) sampled from the real console -- avg {fps:.1f} FPS, "
+             f"p50 {p50_ms:.1f} ms, p95 {p95_ms:.1f} ms, p99 {p99_ms:.1f} ms, "
+             f"{stutters} stutter(s) (>2x the session average frame time).", ""]
+    if gpu_times_us:
+        avg_gpu_ms = sum(gpu_times_us) / len(gpu_times_us) / 1000
+        lines.append(f"`sceGxmFinish()` wait time (real GPU-sync measurement, "
+                      f"{len(gpu_times_us)} sample(s)): avg {avg_gpu_ms:.2f} ms -- see "
+                      f"`docs/dev-notes/perf_telemetry.md` for why this correlates with, but "
+                      f"isn't identical to, GPU-only busy time.")
+        lines.append("")
+
+    with open(plan_path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -243,11 +298,17 @@ def generate_perf_hooks(project_cfg, host_ip=None, port=DEFAULT_PORT, out_dir=No
     header_lines = _hooks_header_lines() + [
         "",
         "#pragma once",
+        "#include <psp2/gxm.h>",
         "",
         "void perf_telemetry_init(const char *host_ip, unsigned short port);",
         "void perf_telemetry_frame_begin(void);",
         "void perf_telemetry_frame_end(void);",
         "void perf_telemetry_sample_cores(void); /* best-effort, see header comment above */",
+        "",
+        "/* Opt-in, profiling builds only -- forces a full GPU pipeline stall. See header",
+        " * comment above and docs/dev-notes/perf_telemetry.md before calling this every",
+        " * frame in anything you'd ship. */",
+        "void perf_telemetry_gpu_sync_and_measure(SceGxmContext *context);",
         "",
     ]
 
@@ -304,6 +365,20 @@ def generate_perf_hooks(project_cfg, host_ip=None, port=DEFAULT_PORT, out_dir=No
         "    snprintf(line, sizeof(line), \"CORES,%d,%d,%d,%d\",",
         "             status.cpuInfo[0].currentThreadId, status.cpuInfo[1].currentThreadId,",
         "             status.cpuInfo[2].currentThreadId, status.cpuInfo[3].currentThreadId);",
+        "    pt_send(line);",
+        "}",
+        "",
+        "/* Real GPU-completion measurement, NOT a fabricated counter: sceGxmFinish() forces",
+        " * a full pipeline flush, so timing it measures actual GPU (plus submission) work --",
+        " * but that stall is a real cost. Call this from a profiling build only, and not",
+        " * necessarily every frame (e.g. every 60th) -- never in anything you'd ship. */",
+        "void perf_telemetry_gpu_sync_and_measure(SceGxmContext *context) {",
+        "    SceKernelSysClock start, end;",
+        "    sceKernelGetProcessTimeWide(&start);",
+        "    sceGxmFinish(context);",
+        "    sceKernelGetProcessTimeWide(&end);",
+        "    char line[64];",
+        "    snprintf(line, sizeof(line), \"GPU,%llu\", (unsigned long long)(end - start));",
         "    pt_send(line);",
         "}",
         "",

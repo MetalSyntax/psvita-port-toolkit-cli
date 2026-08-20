@@ -36,6 +36,30 @@ unrelated crashes both failed to resolve a symbol, comparing `None == None` woul
 explicitly `signature is not None and signature == last_signature` -- an unresolved crash is
 always treated as "new, keep trying", never silently equated with a previous unresolved one.
 
+## Why `_wait_and_check_for_crash()` polls a few times instead of sleeping the whole window
+
+The original version slept the FULL `run_seconds` before checking even once -- correct, but it
+means every iteration pays the whole wait even when the crash (or the "looks stable" outcome)
+was knowable much earlier. Polling a small, fixed number of times (`checks=3` by default, each
+interval floored at 5s) gets most of that time back on the common case without hammering
+VitaShell's ftpd with rapid reconnect attempts -- `ftp_ops.py` already documents that server
+occasionally refusing a connection made right after a previous one just closed, which is
+specifically the failure mode "just poll every second" would risk.
+
+## Why `_check_stubs_wired_into_build()` is a loose text search, not a real CMake parse
+
+Confirming precisely that a `file(GLOB ...)` call's pattern argument matches
+`<project_dir>/source/*.c` would need an actual CMake parser -- overkill for a check whose two
+possible wrong answers are both harmless: a false "yes" just means the porter double-checks
+something that was already fine, and a false "no" means they add a `CMakeLists.txt` line that
+turns out to have already been unnecessary. Searching the whole file for the `GLOB`/`GLOB_RECURSE`
+keyword and the literal `source/*.c` pattern, independently, catches the common case honestly
+without pretending to verify the exact call structure. An earlier version of this check
+required BOTH to appear inside what looked like a single `GLOB(...)`-shaped call -- a
+misunderstanding of CMake's actual syntax (the parenthesis belongs to the surrounding `file(...)`
+command, not to `GLOB` itself), caught by testing it against a real `file(GLOB ...)` line and
+watching it wrongly report `False`.
+
 ## Why the VPK is uploaded fully only on iteration 1, then just `eboot.bin`
 
 The console needs the VPK installed (LiveArea, save data paths, etc.) at least once; every

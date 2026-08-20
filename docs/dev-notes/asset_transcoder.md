@@ -31,6 +31,19 @@ bug; `transcode_texture_dir()` instead lets Pillow's own `Image.open()` failure 
 (caught so one bad asset doesn't abort the batch), so the porter sees exactly which files need a
 different tool (e.g. re-exporting from the original source art) rather than a mysterious gap.
 
+## Why `generate_rawtex_loader()` exists at all
+
+Every other generated-C module in this toolkit (`so_patcher.py`'s stubs, `mem_profiler.py`/
+`perf_telemetry.py`'s hooks, `monkey_tester.py`'s hooks) pairs "here's a format/protocol" with
+"here's real code that reads/writes it". `.rawtex` originally didn't have that second half --
+just a documented byte layout with nothing in this repo actually loading it, which was an
+inconsistency worth closing rather than leaving as a spec nobody implements. The generated loader
+is held to the same "best-effort, verify against your headers" honesty as
+`perf_telemetry.py`'s core sampler for the GXM-specific parts (exact `sceGxmTextureInitLinear()`
+signature, `SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE`) -- but the file-parsing half is asserted
+correct without hedging, because it's just matching this module's OWN `_write_rawtex()` output,
+verified directly against it.
+
 ## Why audio reuses `livearea._find_at9_encoder()` unchanged
 
 That function already documents (and this module doesn't repeat) why there's no free ATRAC9

@@ -26,3 +26,5 @@ venv/
 # Local planning scratch docs (not part of the shipped toolkit) --
 # docs/dev-notes/*.md and README.md stay tracked, see the comment above.
 /PLAN_PSVITA_PORT_TOOLKIT_V*.md
+/PLAN_STATUS.md
+/docs/plan_V4_status.md

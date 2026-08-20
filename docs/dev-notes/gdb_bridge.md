@@ -21,6 +21,18 @@ wrong code. The generated script's placeholder is deliberately impossible to mis
 value, with a comment telling the porter exactly how to get the real one (log it once from the
 loader itself).
 
+## Why `watch_for_so_base()` reuses `debugnet_server.py`'s wire convention instead of inventing its own
+
+A porter's loader almost always ALREADY has some way to print a debug line (their own
+`debugnet`-style call, or nothing more than a raw UDP `printf`) -- requiring a NEW,
+`gdb_bridge.py`-specific log format would mean writing (and testing) another one-off logging
+call just for this. Accepting the exact same "one plain-text line per UDP datagram" convention
+`debugnet_server.py` already established means a porter who already logs `[INFO] loader ready`
+can add one more line (`SO_BASE=0x81000000`) to an existing call, on an existing port, instead of
+wiring up a second listener. `watch_for_so_base()`'s regex is deliberately tolerant of `=` or `:`
+and surrounding text for the same reason: it should work with whatever log-line shape the
+porter's debug call already produces, not force a specific one.
+
 ## Why `elf_path`/`so_path` discovery is duplicated here instead of imported from `crash_analyzer.py`
 
 Same convention as `so_patcher.py`/`mem_align_analyzer.py`: each module keeps its own small

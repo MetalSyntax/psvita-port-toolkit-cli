@@ -27,6 +27,18 @@ inputs are safe to fuzz for any specific game, so the generated function is expl
 behind the porter's own build flag, never auto-enabled -- the porter decides whether/how to guard
 against destructive menu paths before turning it on.
 
+## Why `run_combined_soak_session()` runs the heartbeat listener on the main thread, not the memory profiler
+
+Python only delivers `KeyboardInterrupt` to the main thread -- a background thread blocked in a
+socket call never sees Ctrl+C at all, so if `mem_profiler.run_memory_profiler()` ran there with no
+other way to stop it, the process exiting would silently kill it mid-loop, skipping its own final
+leak report. Keeping the heartbeat listener (the "primary" one the porter is watching) on the main
+thread preserves its existing Ctrl+C behavior exactly; the memory profiler runs on a background
+thread instead, stopped cleanly via a `threading.Event` (`stop_event`) that both
+`run_soak_test()` and `run_memory_profiler()` now accept -- checked on each ~1s socket-timeout
+poll, so either function still shuts down within about a second of being asked to, same as an
+interactive Ctrl+C would, just triggerable from another thread.
+
 ## Why leak detection isn't duplicated here
 
 `mem_profiler.py` already does exactly this (checkpoint-relative leak candidates over a live UDP

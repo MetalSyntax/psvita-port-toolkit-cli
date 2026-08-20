@@ -12,15 +12,17 @@ network calls into any of them (or hardcoded `/sdcard/`, `/data/data/`
 paths) are a common source of hangs/crashes before the game ever reaches
 its own menu.
 
-This module does NOT attempt live in-memory ASM patching of the loaded
+This module does NOT attempt live IN-MEMORY ASM patching of the ALREADY-LOADED
 `.so` at runtime -- that would need an ELF loader/relocator this
 soloader-based toolkit doesn't own, and is a fundamentally different (and
-far riskier) engineering effort. Instead it follows the exact same pattern
-`jni_analyzer.py` already established for FalsoJNI stubs: detect the
-problem statically, then generate REVIEWABLE C source the porter links in
-instead of the real SDK object.
+far riskier) engineering effort. What it DOES do, since a version added a
+real binary patcher: edit the `.so` FILE on disk, before it's ever linked
+into a build -- that needs no loader cooperation at all, since the loader
+just maps whatever bytes are already sitting in the file. The distinction
+matters: "patch the running process's memory" needs the loader's help;
+"patch the file the loader is about to read" doesn't.
 
-Three independent things:
+Four independent things:
 1. `detect_telemetry_sdks()` / `scan_telemetry_sdks_in_java()` -- fingerprint
    known SDKs, first in the game's own `.so` (raw byte scan, same technique
    as `jni_analyzer.detect_middleware()`), then -- usually more fruitful --
@@ -33,14 +35,26 @@ Three independent things:
    `telemetry_stubs.c`/`.h` pair: what usually needs neutralizing for that
    SDK, NOT fabricated function bodies calling entry points this static scan
    can't actually confirm exist on the real call path.
+4. `apply_binary_patch()` -- writes a genuine ARM/Thumb "safe return"
+   instruction (`MOV R0,#0` / `BX LR`) at a caller-CONFIRMED virtual
+   address inside the `.so` file, translated to a file offset via real
+   ELF32 program-header parsing (`vaddr_to_file_offset()`) -- not a guess.
+   This module still can't tell the porter WHICH address to patch (that
+   needs Ghidra/`crash_analyzer.py`/manual confirmation); it only makes
+   applying a confirmed patch mechanical, backed up, and auditable
+   (`.so.orig` + a JSON log of every applied patch, revertible).
 
-See `docs/dev-notes/so_patcher.md` for why this stays a static, source-level
-tool (no in-memory patching), why detection runs two passes instead of one,
-and why the generated stubs are checklists, not fake drop-in replacements.
+See `docs/dev-notes/so_patcher.md` for why detection runs two passes
+instead of one, why the generated stubs are checklists, why the binary
+patcher still requires a human-confirmed address, and why every patch is
+backed up before being written.
 """
 
+import json
 import os
 import re
+import shutil
+import struct
 from pathlib import Path
 
 from . import i18n
@@ -123,6 +137,46 @@ STRINGS = {
         "es": "Generar stubs de neutralización para los SDKs detectados",
         "en": "Generate neutralization stubs for the detected SDKs",
         "pt": "Gerar stubs de neutralização para os SDKs detectados",
+    },
+    "so_patcher.menu_apply_patch": {
+        "es": "Aplicar parche binario real en una dirección confirmada",
+        "en": "Apply a real binary patch at a confirmed address",
+        "pt": "Aplicar patch binário real em um endereço confirmado",
+    },
+    "so_patcher.patch_warning": {
+        "es": "[!] Esta herramienta NO adivina la dirección -- confirmala primero con Ghidra/objdump/crash_analyzer.",
+        "en": "[!] This tool does NOT guess the address -- confirm it first with Ghidra/objdump/crash_analyzer.",
+        "pt": "[!] Esta ferramenta NÃO adivinha o endereço -- confirme primeiro com Ghidra/objdump/crash_analyzer.",
+    },
+    "so_patcher.patch_so_prompt": {
+        "es": "Ruta al .so a parchear [{default}]: ",
+        "en": "Path to the .so to patch [{default}]: ",
+        "pt": "Caminho do .so a corrigir [{default}]: ",
+    },
+    "so_patcher.patch_vaddr_prompt": {
+        "es": "Dirección virtual a parchear (hex, ej. 0x812a4f10): ",
+        "en": "Virtual address to patch (hex, e.g. 0x812a4f10): ",
+        "pt": "Endereço virtual a corrigir (hex, ex. 0x812a4f10): ",
+    },
+    "so_patcher.patch_mode_prompt": {
+        "es": "Modo de instrucción -- thumb/arm [thumb]: ",
+        "en": "Instruction mode -- thumb/arm [thumb]: ",
+        "pt": "Modo de instrução -- thumb/arm [thumb]: ",
+    },
+    "so_patcher.patch_bad_vaddr": {
+        "es": "[-] Dirección inválida (esperado hex, ej. 0x812a4f10).",
+        "en": "[-] Invalid address (expected hex, e.g. 0x812a4f10).",
+        "pt": "[-] Endereço inválido (esperado hex, ex. 0x812a4f10).",
+    },
+    "so_patcher.patch_applied": {
+        "es": "[+] Parche aplicado -- {detail} (backup en {backup})",
+        "en": "[+] Patch applied -- {detail} (backup at {backup})",
+        "pt": "[+] Patch aplicado -- {detail} (backup em {backup})",
+    },
+    "so_patcher.patch_failed": {
+        "es": "[-] No se pudo aplicar el parche: {error}",
+        "en": "[-] Couldn't apply the patch: {error}",
+        "pt": "[-] Não foi possível aplicar o patch: {error}",
     },
 }
 i18n.register(STRINGS)
@@ -603,6 +657,148 @@ def document_findings_in_plan(project_cfg, sdk_hits, path_hits):
 
 
 # ---------------------------------------------------------------------------
+# Real binary patching -- edits the .so FILE on disk, before it's linked into
+# a build. No loader cooperation needed: the loader just maps whatever bytes
+# already sit in the file, so this doesn't touch anything "at load time" --
+# it touches the file the load will eventually read. See the module
+# docstring and docs/dev-notes/so_patcher.md for why this is a genuinely
+# different (and much simpler/safer) problem than in-memory runtime patching.
+# ---------------------------------------------------------------------------
+
+_ELF_MAGIC = b"\x7fELF"
+_ELFCLASS32 = 1
+_PT_LOAD = 1
+
+# ARM/Thumb "safe return" -- MOV r0,#0 ; BX LR (int/bool/pointer-returning
+# functions all read a zero/false/NULL return this way, same "genuinely safe
+# no-op" philosophy as generate_telemetry_stubs()'s C helpers). Thumb-2 is
+# the overwhelmingly common ISA for Android NDK ARMv7 builds, hence the
+# default; ARM mode is offered for the (rarer) function compiled without it.
+PATCH_THUMB_RETURN_ZERO = bytes([0x00, 0x20, 0x70, 0x47])          # MOVS r0,#0 ; BX LR (4 bytes)
+PATCH_ARM_RETURN_ZERO = bytes([0x00, 0x00, 0xA0, 0xE3, 0x1E, 0xFF, 0x2F, 0xE1])  # MOV r0,#0 ; BX LR (8 bytes)
+
+
+def _read_elf32_program_headers(data):
+    """!
+    @brief Parse an ELF32 file's program header table directly from its raw
+           bytes (no external tool -- the layout is a small, stable part of
+           the ELF spec, safer to parse exactly than to depend on some
+           `readelf` version's text output format).
+    @param data Raw file bytes.
+    @return list of `{"type", "offset", "vaddr", "filesz"}` dicts (one per
+            program header), or `None` if `data` isn't a 32-bit ELF file.
+    """
+    if len(data) < 0x2E or data[:4] != _ELF_MAGIC or data[4] != _ELFCLASS32:
+        return None
+    e_phoff, = struct.unpack_from("<I", data, 0x1C)
+    e_phentsize, = struct.unpack_from("<H", data, 0x2A)
+    e_phnum, = struct.unpack_from("<H", data, 0x2C)
+    headers = []
+    for i in range(e_phnum):
+        base = e_phoff + i * e_phentsize
+        if base + 32 > len(data):
+            break
+        p_type, p_offset, p_vaddr, _p_paddr, p_filesz, _p_memsz, _p_flags, _p_align = \
+            struct.unpack_from("<8I", data, base)
+        headers.append({"type": p_type, "offset": p_offset, "vaddr": p_vaddr, "filesz": p_filesz})
+    return headers
+
+
+def vaddr_to_file_offset(so_path, vaddr):
+    """!
+    @brief Translate a runtime virtual address inside a 32-bit ELF `.so`
+           into the file byte offset holding that same code/data.
+    @param so_path Path to the `.so` file.
+    @param vaddr Virtual address (as seen in Ghidra/objdump/a crash dump's
+           PC-relative-to-`.so`-base resolution), as an `int`.
+    @return File offset (`int`), or `None` if `vaddr` doesn't fall inside
+            any `PT_LOAD` segment (wrong address, or not a 32-bit ELF).
+    """
+    data = Path(so_path).read_bytes()
+    headers = _read_elf32_program_headers(data)
+    if headers is None:
+        return None
+    for h in headers:
+        if h["type"] == _PT_LOAD and h["vaddr"] <= vaddr < h["vaddr"] + h["filesz"]:
+            return h["offset"] + (vaddr - h["vaddr"])
+    return None
+
+
+def _patch_log_path(so_path):
+    return Path(so_path).with_suffix(Path(so_path).suffix + ".binary_patches.json")
+
+
+def apply_binary_patch(so_path, vaddr, mode="thumb", backup=True):
+    """!
+    @brief Write a safe-return patch at a CALLER-CONFIRMED virtual address
+           inside a `.so` FILE (not a running process) -- backed up and logged.
+    @param so_path Path to the `.so` file to patch.
+    @param vaddr Virtual address to patch, as an `int`. This function does
+           NOT validate that this is actually a sensible patch point (a
+           function entry, a safe instruction boundary) -- that confirmation
+           has to come from the porter reading Ghidra/objdump/`crash_analyzer.py`
+           output first. Patching the wrong address can corrupt the binary.
+    @param mode `"thumb"` (default, 4-byte patch) or `"arm"` (8-byte patch).
+    @param backup If `True` (default), copies `so_path` to `<so_path>.orig`
+           before writing, ONLY if that backup doesn't already exist (so
+           re-running this multiple times never overwrites the true original
+           with an already-patched copy).
+    @return `(ok, detail)` -- `detail` is a human-readable description of
+           what was written (offset + before/after hex) on success, or the
+           reason it failed. Every successful patch is also appended to
+           `<so_path>.binary_patches.json` for later review/revert.
+    """
+    so_path = Path(so_path)
+    if not so_path.exists():
+        return False, f"'{so_path}' does not exist"
+
+    patch = PATCH_THUMB_RETURN_ZERO if mode == "thumb" else PATCH_ARM_RETURN_ZERO
+    offset = vaddr_to_file_offset(so_path, vaddr)
+    if offset is None:
+        return False, f"0x{vaddr:x} isn't inside any PT_LOAD segment of '{so_path.name}' (wrong address, or not a 32-bit ELF)"
+
+    data = bytearray(so_path.read_bytes())
+    if offset + len(patch) > len(data):
+        return False, f"patch at file offset 0x{offset:x} would run past the end of the file"
+
+    original = bytes(data[offset:offset + len(patch)])
+    if backup:
+        bak = so_path.with_suffix(so_path.suffix + ".orig")
+        if not bak.exists():
+            shutil.copy2(so_path, bak)
+
+    data[offset:offset + len(patch)] = patch
+    so_path.write_bytes(data)
+
+    log_path = _patch_log_path(so_path)
+    log = json.loads(log_path.read_text(encoding="utf-8")) if log_path.exists() else []
+    log.append({"vaddr": f"0x{vaddr:x}", "offset": f"0x{offset:x}", "mode": mode,
+                "before": original.hex(), "after": patch.hex()})
+    log_path.write_text(json.dumps(log, indent=2), encoding="utf-8")
+
+    detail = f"0x{vaddr:x} (file offset 0x{offset:x}): {original.hex()} -> {patch.hex()}"
+    return True, detail
+
+
+def revert_binary_patches(so_path):
+    """!
+    @brief Restore `.so_path` from its `.orig` backup, undoing every patch
+           `apply_binary_patch()` ever applied to it.
+    @param so_path Path to the (possibly patched) `.so` file.
+    @return `(ok, message)`.
+    """
+    so_path = Path(so_path)
+    bak = so_path.with_suffix(so_path.suffix + ".orig")
+    if not bak.exists():
+        return False, f"no backup found at '{bak}' -- nothing to revert"
+    shutil.copy2(bak, so_path)
+    log_path = _patch_log_path(so_path)
+    if log_path.exists():
+        log_path.unlink()
+    return True, f"restored from '{bak}'"
+
+
+# ---------------------------------------------------------------------------
 # Orchestration + TUI
 # ---------------------------------------------------------------------------
 
@@ -675,10 +871,37 @@ def patch_menu(project_cfg, global_cfg):
             return
         generate_telemetry_stubs(project_cfg, all_names)
 
+    def _apply_patch():
+        print(f"{C.YELLOW}{t('so_patcher.patch_warning')}{C.RESET}")
+        project_dir = Path(project_cfg["_project_dir"])
+        default_so = _find_primary_so(project_dir) or ""
+        so_raw = input(f"{C.BOLD}{t('so_patcher.patch_so_prompt', default=default_so)}{C.RESET}").strip()
+        so_path = so_raw or default_so
+        if not so_path:
+            return
+
+        vaddr_raw = input(f"{C.BOLD}{t('so_patcher.patch_vaddr_prompt')}{C.RESET}").strip()
+        try:
+            vaddr = int(vaddr_raw, 16)
+        except ValueError:
+            print(f"{C.RED}{t('so_patcher.patch_bad_vaddr')}{C.RESET}")
+            return
+
+        mode_raw = input(f"{C.BOLD}{t('so_patcher.patch_mode_prompt')}{C.RESET}").strip().lower()
+        mode = mode_raw if mode_raw in ("thumb", "arm") else "thumb"
+
+        ok, detail = apply_binary_patch(so_path, vaddr, mode=mode)
+        if ok:
+            bak = Path(so_path).with_suffix(Path(so_path).suffix + ".orig")
+            print(f"{C.GREEN}{t('so_patcher.patch_applied', detail=detail, backup=bak)}{C.RESET}")
+        else:
+            print(f"{C.RED}{t('so_patcher.patch_failed', error=detail)}{C.RESET}")
+
     tui.run_menu(
         t("so_patcher.menu_title"),
         [
             (t("so_patcher.menu_scan"), _scan),
             (t("so_patcher.menu_gen_stubs"), _gen_stubs),
+            (t("so_patcher.menu_apply_patch"), _apply_patch),
         ],
     )

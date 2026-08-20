@@ -25,6 +25,7 @@ that, not duplicated here. See `docs/dev-notes/monkey_tester.md`.
 """
 
 import socket
+import threading
 import time
 from pathlib import Path
 
@@ -43,6 +44,11 @@ STRINGS = {
         "es": "Correr soak test (escuchar heartbeat hasta Ctrl+C)",
         "en": "Run soak test (listen for heartbeat until Ctrl+C)",
         "pt": "Rodar soak test (escutar heartbeat até Ctrl+C)",
+    },
+    "monkey_tester.menu_combined": {
+        "es": "Correr soak test + Profiler de Memoria juntos (Leak Sentinel)",
+        "en": "Run soak test + Memory Profiler together (Leak Sentinel)",
+        "pt": "Rodar soak test + Profiler de Memória juntos (Leak Sentinel)",
     },
     "monkey_tester.menu_gen_hooks": {
         "es": "Generar monkey_test_hooks.c/.h (heartbeat + entrada aleatoria opcional)",
@@ -129,7 +135,7 @@ def _session_log_path(project_cfg):
     return logs_dir / f"soak_test_{stamp}.log"
 
 
-def run_soak_test(project_cfg, port=DEFAULT_PORT, hang_timeout=DEFAULT_HANG_TIMEOUT):
+def run_soak_test(project_cfg, port=DEFAULT_PORT, hang_timeout=DEFAULT_HANG_TIMEOUT, stop_event=None):
     """!
     @brief Listen for `HEARTBEAT,<tick>` UDP datagrams and flag any gap
            longer than `hang_timeout` seconds, until interrupted.
@@ -138,6 +144,10 @@ def run_soak_test(project_cfg, port=DEFAULT_PORT, hang_timeout=DEFAULT_HANG_TIME
     @param hang_timeout Seconds without a heartbeat before flagging a
            possible hang/crash. Listening continues afterward -- see the
            module docstring for why this never auto-stops.
+    @param stop_event Optional `threading.Event` -- when set, the loop exits
+           cleanly on its next ~1s poll, same reasoning as
+           `mem_profiler.run_memory_profiler()`'s `stop_event` param.
+           `None` (default) preserves the original Ctrl+C-only behavior.
     @note At the end, if zero hang incidents were recorded, appends a
           "Tested: N hours crash-free" line to `PORTING_PLAN.md` -- the
           plan's requested certification, written only when actually true.
@@ -164,7 +174,7 @@ def run_soak_test(project_cfg, port=DEFAULT_PORT, hang_timeout=DEFAULT_HANG_TIME
 
     try:
         with open(log_path, "a", encoding="utf-8") as logf:
-            while True:
+            while not (stop_event and stop_event.is_set()):
                 try:
                     data, addr = sock.recvfrom(65536)
                 except socket.timeout:
@@ -196,6 +206,46 @@ def run_soak_test(project_cfg, port=DEFAULT_PORT, hang_timeout=DEFAULT_HANG_TIME
                     f.write(f"\n## Soak test (psvita-toolkit)\n\n"
                             f"Tested: 0 hang/crash incidents across {elapsed} of automated soak "
                             f"testing on the real console ({heartbeats} heartbeats received).\n")
+
+
+def run_combined_soak_session(project_cfg, heartbeat_port=DEFAULT_PORT, mem_port=None,
+                               hang_timeout=DEFAULT_HANG_TIMEOUT):
+    """!
+    @brief Run the soak-test heartbeat listener AND `mem_profiler.py`'s live
+           heap listener together for one session, so the plan's "Leak
+           Sentinel" pairing (hang detection + leak detection over the same
+           long unattended run) doesn't need two manually-launched terminals.
+    @details Doesn't duplicate `mem_profiler.py`'s leak logic (that stays a
+           dedicated, independently-testable module) -- this just runs both
+           listeners concurrently. The heartbeat listener stays on the main
+           thread (so Ctrl+C reaches it directly, same as running it alone);
+           the memory profiler runs on a background thread, since Python
+           only delivers `KeyboardInterrupt` to the main thread -- a
+           `threading.Event` (`stop_event`, see `mem_profiler.run_memory_profiler()`)
+           tells it to stop cleanly once the heartbeat listener returns,
+           instead of the thread being silently killed mid-loop when the
+           process exits (which would skip its own final leak report).
+    @param project_cfg Per-project config dict.
+    @param heartbeat_port UDP port for the soak-test heartbeat.
+    @param mem_port UDP port for the memory profiler; defaults to
+           `mem_profiler.DEFAULT_PORT`.
+    @param hang_timeout Seconds without a heartbeat before flagging a hang.
+    """
+    from . import mem_profiler
+    mem_port = mem_port or mem_profiler.DEFAULT_PORT
+    stop_event = threading.Event()
+
+    mem_thread = threading.Thread(
+        target=mem_profiler.run_memory_profiler,
+        kwargs={"project_cfg": project_cfg, "port": mem_port, "stop_event": stop_event},
+        daemon=True,
+    )
+    mem_thread.start()
+    try:
+        run_soak_test(project_cfg, port=heartbeat_port, hang_timeout=hang_timeout)
+    finally:
+        stop_event.set()
+        mem_thread.join(timeout=5)
 
 
 # ---------------------------------------------------------------------------
@@ -313,17 +363,26 @@ def monkey_tester_menu(project_cfg, global_cfg):
     @param global_cfg Global config dict (accepted for a uniform menu-item
            call signature; unused today).
     """
-    def _listen():
+    def _ask_port_and_timeout():
         port_raw = input(f"{C.BOLD}{t('monkey_tester.port_prompt', default=DEFAULT_PORT)}{C.RESET}").strip()
         port = int(port_raw) if port_raw.isdigit() else DEFAULT_PORT
         timeout_raw = input(f"{C.BOLD}{t('monkey_tester.hang_timeout_prompt', default=DEFAULT_HANG_TIMEOUT)}{C.RESET}").strip()
         hang_timeout = int(timeout_raw) if timeout_raw.isdigit() else DEFAULT_HANG_TIMEOUT
+        return port, hang_timeout
+
+    def _listen():
+        port, hang_timeout = _ask_port_and_timeout()
         run_soak_test(project_cfg, port=port, hang_timeout=hang_timeout)
+
+    def _listen_combined():
+        port, hang_timeout = _ask_port_and_timeout()
+        run_combined_soak_session(project_cfg, heartbeat_port=port, hang_timeout=hang_timeout)
 
     tui.run_menu(
         t("monkey_tester.menu_title"),
         [
             (t("monkey_tester.menu_listen"), _listen),
+            (t("monkey_tester.menu_combined"), _listen_combined),
             (t("monkey_tester.menu_gen_hooks"), lambda: generate_monkey_hooks(project_cfg)),
         ],
     )

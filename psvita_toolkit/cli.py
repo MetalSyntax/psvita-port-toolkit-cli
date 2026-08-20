@@ -153,6 +153,12 @@ def build_parser():
     p_patch.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_patch.add_argument("--gen-stubs", action="store_true", help="Generate telemetry_stubs.c/.h for detected SDKs.")
     p_patch.add_argument("--out-dir", help="Output directory for generated stubs.")
+    p_patch.add_argument("--apply-patch", metavar="VADDR",
+                          help="Apply a real safe-return binary patch at this CONFIRMED virtual address (hex, e.g. 0x812a4f10). "
+                               "Requires --so; does NOT guess the address -- confirm it with Ghidra/objdump/analyze first.")
+    p_patch.add_argument("--revert-patches", action="store_true", help="Restore --so from its .orig backup, undoing every applied patch.")
+    p_patch.add_argument("--so", help="Path to the .so to patch/revert (only with --apply-patch/--revert-patches).")
+    p_patch.add_argument("--mode", default="thumb", choices=["thumb", "arm"], help="Instruction mode for --apply-patch (default: thumb).")
 
     p_sync = sub.add_parser("sync-shared", help="Sync shared component across ports of the same engine family.")
     p_sync.add_argument("--engine", required=True, help="Engine family name (e.g. 'Zenonia Series', 'Unity 4/5', 'Gamevil RPGs').")
@@ -181,12 +187,18 @@ def build_parser():
     p_gdb.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_gdb.add_argument("--gdb-port", type=int, help="gdbstub port on the Vita (default: 10001).")
     p_gdb.add_argument("--so-base", help="Runtime base address of the .so, hex (e.g. 0x81000000), if already known.")
+    p_gdb.add_argument("--watch-base", action="store_true",
+                        help="Auto-capture the base address from a UDP 'SO_BASE=0x...' log line instead of --so-base.")
+    p_gdb.add_argument("--watch-port", type=int, help="UDP port to listen on for --watch-base (default: 9999).")
+    p_gdb.add_argument("--watch-timeout", type=int, help="Seconds to wait for --watch-base (default: 30).")
 
     p_transcode = sub.add_parser("transcode-assets", help="Batch-transcode textures (.rawtex + mipmaps) and/or audio (.at9).")
     p_transcode.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_transcode.add_argument("--textures-dir", help="Source folder of images to transcode.")
     p_transcode.add_argument("--audio-dir", help="Source folder of .wav/.mp3/.ogg/.at9 files to transcode.")
     p_transcode.add_argument("--out-dir", help="Output directory (default: <project>/extras/native_assets).")
+    p_transcode.add_argument("--gen-loader", action="store_true",
+                              help="Also generate rawtex_loader.c/.h (real C to load .rawtex via sceGxmTextureInitLinear).")
 
     p_perf = sub.add_parser("perf-telemetry", help="Listen for live frame-pacing/core telemetry from the real console, or generate the C-side hooks.")
     p_perf.add_argument("--project", help="Path to the port directory (default: current directory).")
@@ -202,6 +214,9 @@ def build_parser():
     p_soak.add_argument("--gen-hooks", action="store_true", help="Generate monkey_test_hooks.c/.h instead of listening.")
     p_soak.add_argument("--host-ip", help="Dev machine IP to bake into the generated hooks (only with --gen-hooks).")
     p_soak.add_argument("--out-dir", help="Output directory for generated hooks (only with --gen-hooks).")
+    p_soak.add_argument("--with-mem-profile", action="store_true",
+                         help="Also run mem_profiler.py's heap listener in parallel (the plan's 'Leak Sentinel' pairing).")
+    p_soak.add_argument("--mem-port", type=int, help="UDP port for --with-mem-profile (default: 9998).")
 
     p_auto = sub.add_parser("auto-bootstrap", help="Assisted build/deploy/crash-check loop against the real console.")
     p_auto.add_argument("--project", help="Path to the port directory (default: current directory).")
@@ -210,6 +225,15 @@ def build_parser():
     p_auto.add_argument("--preset", default="debug",
                          choices=["debug", "release", "relwithdebinfo", "minsizerel"],
                          help="Build preset (default: debug).")
+
+    p_transpile = sub.add_parser("shader-transpile", help="AST-based GLSL -> Cg transpile (glslangValidator + spirv-cross) for a whole dump directory.")
+    p_transpile.add_argument("--dump-dir", required=True, help="Directory of dumped .glsl files to transpile.")
+    p_transpile.add_argument("--out-dir", required=True, help="Directory to write the resulting .cg files into.")
+    p_transpile.add_argument("--vitasdk", help="Override VITASDK path for psp2cgc validation (default: from global config).")
+
+    p_live_reload = sub.add_parser("shader-live-reload", help="Watch assets/cg/*.cg and auto-upload each one to the real console on save.")
+    p_live_reload.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_live_reload.add_argument("--poll-interval", type=int, help="Seconds between mtime checks (default: 2).")
 
     return parser
 
@@ -448,11 +472,28 @@ def _cmd_export_context(args):
 
 def _cmd_so_patch(args):
     """!
-    @brief `so-patch` subcommand handler: detect telemetry SDKs and optionally generate stubs.
-    @param args Parsed CLI args (`project`, `gen_stubs`, `out_dir`).
-    @return `1` on missing project, else `0`.
+    @brief `so-patch` subcommand handler: detect telemetry SDKs, optionally
+           generate stubs, or apply/revert a real binary patch.
+    @param args Parsed CLI args (`project`, `gen_stubs`, `out_dir`,
+           `apply_patch`, `revert_patches`, `so`, `mode`).
+    @return `1` on missing project/invalid input or a failed patch, else `0`.
     """
     from . import so_patcher
+
+    if args.apply_patch or args.revert_patches:
+        if not args.so:
+            return _fail("--apply-patch/--revert-patches require --so.")
+        if args.revert_patches:
+            ok, msg = so_patcher.revert_binary_patches(args.so)
+        else:
+            try:
+                vaddr = int(args.apply_patch, 16)
+            except ValueError:
+                return _fail(f"--apply-patch '{args.apply_patch}' is not a valid hex address.")
+            ok, msg = so_patcher.apply_binary_patch(args.so, vaddr, mode=args.mode)
+        print(("[+] " if ok else "[-] ") + msg)
+        return 0 if ok else 1
+
     global_cfg, err = _load_global_config()
     if err:
         return _fail(err)
@@ -554,19 +595,29 @@ def _cmd_web(args):
 def _cmd_gdb_map(args):
     """!
     @brief `gdb-map` subcommand handler: generate the GDB symbol-map script.
-    @param args Parsed CLI args (`project`, `gdb_port`, `so_base`).
-    @return `1` on missing project, else `0`.
+    @param args Parsed CLI args (`project`, `gdb_port`, `so_base`,
+           `watch_base`, `watch_port`, `watch_timeout`).
+    @return `1` on missing project or a bad `--so-base`, else `0`.
     """
     from . import gdb_bridge
     project_cfg, err = _load_project(args.project)
     if err:
         return _fail(err)
+
     so_base = None
-    if args.so_base:
+    if args.watch_base:
+        so_base = gdb_bridge.watch_for_so_base(
+            port=args.watch_port or gdb_bridge.DEFAULT_WATCH_PORT,
+            timeout=args.watch_timeout or gdb_bridge.DEFAULT_WATCH_TIMEOUT,
+        )
+        if so_base is None:
+            print("[-] No SO_BASE=0x... line arrived in time -- falling back to no base address.", file=sys.stderr)
+    elif args.so_base:
         try:
             so_base = int(args.so_base, 16)
         except ValueError:
             return _fail(f"--so-base '{args.so_base}' is not a valid hex address.")
+
     gdb_bridge.generate_symbol_map(project_cfg, gdb_port=args.gdb_port or gdb_bridge.DEFAULT_GDB_PORT, so_base=so_base)
     return 0
 
@@ -574,8 +625,8 @@ def _cmd_gdb_map(args):
 def _cmd_transcode_assets(args):
     """!
     @brief `transcode-assets` subcommand handler: batch-transcode textures and/or audio.
-    @param args Parsed CLI args (`project`, `textures_dir`, `audio_dir`, `out_dir`).
-    @return `1` on missing project or if neither `--textures-dir`/`--audio-dir` was given, else `0`.
+    @param args Parsed CLI args (`project`, `textures_dir`, `audio_dir`, `out_dir`, `gen_loader`).
+    @return `1` on missing project or if none of `--textures-dir`/`--audio-dir`/`--gen-loader` was given, else `0`.
     """
     from . import asset_transcoder
     global_cfg, err = _load_global_config()
@@ -584,13 +635,15 @@ def _cmd_transcode_assets(args):
     project_cfg, err = _load_project(args.project)
     if err:
         return _fail(err)
-    if not args.textures_dir and not args.audio_dir:
-        return _fail("transcode-assets requires at least one of --textures-dir/--audio-dir.")
+    if not args.textures_dir and not args.audio_dir and not args.gen_loader:
+        return _fail("transcode-assets requires at least one of --textures-dir/--audio-dir/--gen-loader.")
     out_dir = args.out_dir or (Path(project_cfg["_project_dir"]) / "extras" / "native_assets")
     if args.textures_dir:
         asset_transcoder.transcode_texture_dir(args.textures_dir, out_dir)
     if args.audio_dir:
         asset_transcoder.transcode_audio_dir(args.audio_dir, out_dir, global_cfg)
+    if args.gen_loader:
+        asset_transcoder.generate_rawtex_loader(project_cfg)
     return 0
 
 
@@ -617,7 +670,8 @@ def _cmd_soak_test(args):
     """!
     @brief `soak-test` subcommand handler: run the heartbeat listener until
            interrupted, or (with `--gen-hooks`) generate the C-side hooks.
-    @param args Parsed CLI args (`project`, `port`, `hang_timeout`, `gen_hooks`, `host_ip`, `out_dir`).
+    @param args Parsed CLI args (`project`, `port`, `hang_timeout`, `gen_hooks`,
+           `host_ip`, `out_dir`, `with_mem_profile`, `mem_port`).
     @return `1` on missing project, else `0`.
     """
     from . import monkey_tester
@@ -627,6 +681,10 @@ def _cmd_soak_test(args):
     if args.gen_hooks:
         monkey_tester.generate_monkey_hooks(
             project_cfg, host_ip=args.host_ip, port=args.port or monkey_tester.DEFAULT_PORT, out_dir=args.out_dir)
+    elif args.with_mem_profile:
+        monkey_tester.run_combined_soak_session(
+            project_cfg, heartbeat_port=args.port or monkey_tester.DEFAULT_PORT,
+            mem_port=args.mem_port, hang_timeout=args.hang_timeout or monkey_tester.DEFAULT_HANG_TIMEOUT)
     else:
         monkey_tester.run_soak_test(
             project_cfg, port=args.port or monkey_tester.DEFAULT_PORT,
@@ -658,6 +716,41 @@ def _cmd_auto_bootstrap(args):
     return 0 if ok else 1
 
 
+def _cmd_shader_transpile(args):
+    """!
+    @brief `shader-transpile` subcommand handler: batch AST-based GLSL -> Cg transpile.
+    @param args Parsed CLI args (`dump_dir`, `out_dir`, `vitasdk`).
+    @return `1` if any shader failed to transpile, else `0`.
+    """
+    from . import shader_transpiler
+    global_cfg, err = _load_global_config()
+    if err:
+        global_cfg = {}
+    if args.vitasdk:
+        global_cfg["vitasdk"] = args.vitasdk
+    _ok, failed = shader_transpiler.transpile_shaders_dir(args.dump_dir, args.out_dir, global_cfg)
+    return 1 if failed else 0
+
+
+def _cmd_shader_live_reload(args):
+    """!
+    @brief `shader-live-reload` subcommand handler: watch and auto-upload `.cg` shaders until interrupted.
+    @param args Parsed CLI args (`project`, `poll_interval`).
+    @return `1` on missing config/project, else `0`.
+    """
+    from . import shader_live_reload
+    global_cfg, err = _load_global_config()
+    if err:
+        return _fail(err)
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+    shader_live_reload.watch_and_upload_shaders(
+        project_cfg, global_cfg, poll_interval=args.poll_interval or shader_live_reload.DEFAULT_POLL_INTERVAL)
+    return 0
+
+
 _HANDLERS = {
     "doctor": _cmd_doctor,
     "build": _cmd_build,
@@ -680,6 +773,8 @@ _HANDLERS = {
     "perf-telemetry": _cmd_perf_telemetry,
     "soak-test": _cmd_soak_test,
     "auto-bootstrap": _cmd_auto_bootstrap,
+    "shader-transpile": _cmd_shader_transpile,
+    "shader-live-reload": _cmd_shader_live_reload,
 }
 
 
