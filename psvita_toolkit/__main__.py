@@ -162,6 +162,11 @@ STRINGS = {
         "en": "Verify data assets (local count vs. Vita via FTP)",
         "pt": "Verificar assets de dados (contagem local vs. Vita via FTP)",
     },
+    "main.utils.scaffold_ux0data": {
+        "es": "Replicar estructura local de ux0:data/<slug>/ (assets/res del APK)",
+        "en": "Replicate local ux0:data/<slug>/ structure (APK's assets/res)",
+        "pt": "Replicar estrutura local de ux0:data/<slug>/ (assets/res do APK)",
+    },
     "main.utils.translate_docs": {
         "es": "Traducir los .md del proyecto en lote (deep-translator)",
         "en": "Batch-translate the project's .md files (deep-translator)",
@@ -419,6 +424,7 @@ def _utils_submenu(project_cfg, global_cfg):
         (t("main.utils.export_context"), lambda: context_feeder.export_context_menu(project_cfg, global_cfg)),
         (t("main.utils.clean_macos_junk"), lambda: utils.clean_macos_junk(project_cfg["_project_dir"])),
         (t("main.utils.decompile_all"), lambda: utils.decompile_all(project_cfg, global_cfg)),
+        (t("main.utils.scaffold_ux0data"), lambda: utils.scaffold_ux0_data(project_cfg)),
         (t("main.utils.run_tests"), lambda: utils.run_project_tests(project_cfg)),
         (t("main.utils.search_symbols"), do_search_symbols),
         (t("main.utils.verify_assets"),

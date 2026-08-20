@@ -77,6 +77,41 @@ STRINGS = {
         "en": "[!] {name} failed",
         "pt": "[!] Falhou {name}",
     },
+    "utils.ux0data_using_extract": {
+        "es": "[*] Usando extracción existente en {path}",
+        "en": "[*] Using existing extraction at {path}",
+        "pt": "[*] Usando extração existente em {path}",
+    },
+    "utils.ux0data_no_extract": {
+        "es": "{color_yellow}[!] No hay extracción ni .apk en {project_dir} -- extraé el APK primero.{color_reset}",
+        "en": "{color_yellow}[!] No extraction or .apk found in {project_dir} -- extract the APK first.{color_reset}",
+        "pt": "{color_yellow}[!] Nenhuma extração ou .apk em {project_dir} -- extraia o APK primeiro.{color_reset}",
+    },
+    "utils.ux0data_extracting_apk": {
+        "es": "[*] Extrayendo {apk} a {dirname}/ ...",
+        "en": "[*] Extracting {apk} to {dirname}/ ...",
+        "pt": "[*] Extraindo {apk} para {dirname}/ ...",
+    },
+    "utils.ux0data_no_source_dirs": {
+        "es": "{color_yellow}[!] {extract_dir} no tiene assets/ ni res/ -- nada para replicar.{color_reset}",
+        "en": "{color_yellow}[!] {extract_dir} has no assets/ or res/ -- nothing to replicate.{color_reset}",
+        "pt": "{color_yellow}[!] {extract_dir} não tem assets/ nem res/ -- nada para replicar.{color_reset}",
+    },
+    "utils.ux0data_copying": {
+        "es": "[*] Copiando {src} -> {dst}",
+        "en": "[*] Copying {src} -> {dst}",
+        "pt": "[*] Copiando {src} -> {dst}",
+    },
+    "utils.ux0data_dir_done": {
+        "es": "{color_green}[+] {count} archivo(s) ({size_mb} MB) replicados en {dest}{color_reset}",
+        "en": "{color_green}[+] {count} file(s) ({size_mb} MB) replicated into {dest}{color_reset}",
+        "pt": "{color_green}[+] {count} arquivo(s) ({size_mb} MB) replicados em {dest}{color_reset}",
+    },
+    "utils.ux0data_next_step": {
+        "es": "{color_dim}    Esta es la estructura local que se sube a ux0:data/{slug}/ en la consola\n    (mismo DATA_PATH que CMakeLists.txt). Subila por FTP/VitaShell y comparala\n    después con 'Verificar assets de datos' en Utilidades.{color_reset}",
+        "en": "{color_dim}    This is the local structure uploaded to ux0:data/{slug}/ on the console\n    (same DATA_PATH as CMakeLists.txt). Upload it via FTP/VitaShell and compare\n    it afterward with 'Verify data assets' in Utilities.{color_reset}",
+        "pt": "{color_dim}    Esta é a estrutura local enviada para ux0:data/{slug}/ no console\n    (mesmo DATA_PATH do CMakeLists.txt). Envie-a via FTP/VitaShell e compare\n    depois com 'Verificar assets de dados' em Utilidades.{color_reset}",
+    },
     "utils.tests_no_script": {
         "es": "{color_yellow}[-] Este proyecto no tiene tests/run_tests.sh.{color_reset}",
         "en": "{color_yellow}[-] This project doesn't have tests/run_tests.sh.{color_reset}",
@@ -359,6 +394,91 @@ def decompile_all(project_cfg, global_cfg):
             "devrvk/so-decompiler", "decompile", f"/input/{so_file.name}", "/output",
         ])
         print(t("utils.decompile_so_done", path=so_out) if r.returncode == 0 else t("utils.decompile_so_failed", name=so_file.name))
+
+
+def _copytree_clean(src, dst):
+    """!
+    @brief Recursively copy `src` into `dst`, skipping macOS junk (`._*`, `.DS_Store`).
+    @param src Source directory.
+    @param dst Destination directory (created as needed).
+    @return Tuple `(file_count, total_bytes)` copied.
+    """
+    file_count = 0
+    total_bytes = 0
+    for item in sorted(Path(src).rglob("*")):
+        if item.name.startswith("._") or item.name == ".DS_Store":
+            continue
+        target = Path(dst) / item.relative_to(src)
+        if item.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+            file_count += 1
+            total_bytes += target.stat().st_size
+    return file_count, total_bytes
+
+
+def scaffold_ux0_data(project_cfg):
+    """!
+    @brief Replicate `<project_dir>/ux0_data/<slug>/`, the local staging folder
+           mirroring `ux0:data/<slug>/` on the console, from the extracted
+           APK's `assets/`/`res/` -- the same layout every sibling port under
+           BASE_DIR already has.
+    @param project_cfg Per-project config dict (`slug`, `apk_basename`).
+    @note Reuses `<slug>_extract/` (or the legacy `apk_extract/`) if present;
+          otherwise extracts the project's `.apk` on the fly, same convention
+          as `decompile_all()`. Always ends up with `saves/` and `logs/`
+          alongside the mirrored asset folders, matching every sibling port.
+    """
+    project_dir = Path(project_cfg["_project_dir"])
+    slug = project_cfg["slug"]
+
+    extract_dir = None
+    for candidate in (f"{slug}_extract", "apk_extract"):
+        d = project_dir / candidate
+        if d.is_dir():
+            extract_dir = d
+            break
+
+    if extract_dir:
+        print(t("utils.ux0data_using_extract", path=extract_dir))
+    else:
+        apk_basename = project_cfg.get("apk_basename", "")
+        apk_file = project_dir / apk_basename if apk_basename else None
+        if not apk_file or not apk_file.exists():
+            candidates = list(project_dir.glob("*.apk"))
+            apk_file = candidates[0] if candidates else None
+        if not apk_file:
+            print(t("utils.ux0data_no_extract", color_yellow=C.YELLOW, project_dir=project_dir, color_reset=C.RESET))
+            return
+        extract_dir = project_dir / f"{slug}_extract"
+        print(t("utils.ux0data_extracting_apk", apk=apk_file.name, dirname=extract_dir.name))
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["unzip", "-qq", "-o", str(apk_file), "-d", str(extract_dir)])
+
+    source_names = [name for name in ("assets", "res") if (extract_dir / name).is_dir()]
+    if not source_names:
+        print(t("utils.ux0data_no_source_dirs", color_yellow=C.YELLOW, extract_dir=extract_dir, color_reset=C.RESET))
+        return
+
+    dest_root = project_dir / "ux0_data" / slug
+    total_files = 0
+    total_bytes = 0
+    for name in source_names:
+        src = extract_dir / name
+        dst = dest_root / name
+        print(t("utils.ux0data_copying", src=src, dst=dst))
+        count, size = _copytree_clean(src, dst)
+        total_files += count
+        total_bytes += size
+
+    for runtime_dir in ("saves", "logs"):
+        (dest_root / runtime_dir).mkdir(parents=True, exist_ok=True)
+
+    size_mb = f"{total_bytes / (1024 * 1024):.1f}"
+    print(t("utils.ux0data_dir_done", color_green=C.GREEN, count=total_files, size_mb=size_mb, dest=dest_root, color_reset=C.RESET))
+    print(t("utils.ux0data_next_step", color_dim=C.DIM, slug=slug, color_reset=C.RESET))
 
 
 def run_project_tests(project_cfg):
