@@ -53,6 +53,21 @@ STRINGS = {
         "en": "Docker (.so decompilation)",
         "pt": "Docker (decompilação de .so)",
     },
+    "doctor.section.v4_tools": {
+        "es": "Herramientas opcionales v4 (GDB, transcodificación de texturas)",
+        "en": "Optional v4 tools (GDB, texture transcoding)",
+        "pt": "Ferramentas opcionais v4 (GDB, transcodificação de texturas)",
+    },
+    "doctor.hint.gdb_multiarch_missing": {
+        "es": "no encontrado (opcional) -- necesario para usar el script de gdb_bridge.py",
+        "en": "not found (optional) -- needed to actually use gdb_bridge.py's generated script",
+        "pt": "não encontrado (opcional) -- necessário para usar o script gerado por gdb_bridge.py",
+    },
+    "doctor.hint.texture_encoder_missing": {
+        "es": "ninguno encontrado (opcional) -- asset_transcoder.py sigue funcionando (.rawtex sin comprimir), pero sin compresión GPU real sin PVRTexToolCLI/compressonatorcli",
+        "en": "none found (optional) -- asset_transcoder.py still works (uncompressed .rawtex), but no real GPU compression without PVRTexToolCLI/compressonatorcli",
+        "pt": "nenhum encontrado (opcional) -- asset_transcoder.py continua funcionando (.rawtex sem compressão), mas sem compressão GPU real sem PVRTexToolCLI/compressonatorcli",
+    },
     "doctor.section.decompilers": {
         "es": "Decompiladores",
         "en": "Decompilers",
@@ -359,6 +374,32 @@ def _check_jadx():
     return [_check("jadx", FAIL, t("doctor.hint.jadx_missing"))]
 
 
+def _check_v4_tools():
+    """!
+    @brief Verify the optional external tools `gdb_bridge.py`/`asset_transcoder.py`
+           can make use of (`gdb-multiarch`, `PVRTexToolCLI`/`compressonatorcli`).
+    @details All WARN, never FAIL -- both modules degrade gracefully without
+           these (a `.gdb` script is still written even with no local
+           `gdb-multiarch` to run it with; `.rawtex` textures are always
+           produced even with no GPU-compression backend present).
+    @return list of check tuples.
+    """
+    checks = []
+    gdb_path = shutil.which("gdb-multiarch") or shutil.which("gdb")
+    checks.append(_check("gdb-multiarch", OK if gdb_path else WARN,
+                          t("doctor.detail.found_at", path=gdb_path) if gdb_path
+                          else t("doctor.hint.gdb_multiarch_missing")))
+
+    for name in ("PVRTexToolCLI", "compressonatorcli"):
+        found = shutil.which(name)
+        if found:
+            checks.append(_check(name, OK, t("doctor.detail.found_at", path=found)))
+            break
+    else:
+        checks.append(_check("PVRTexToolCLI/compressonatorcli", WARN, t("doctor.hint.texture_encoder_missing")))
+    return checks
+
+
 _REQUIRED_PY_PACKAGES = (("Pillow", "PIL"),)
 _OPTIONAL_PY_PACKAGES = (("deep-translator", "deep_translator"),)
 
@@ -396,6 +437,7 @@ def run_checks(global_cfg):
         (t("doctor.section.build_tools"), _check_build_tools()),
         (t("doctor.section.docker"), _check_docker()),
         (t("doctor.section.decompilers"), _check_jadx()),
+        (t("doctor.section.v4_tools"), _check_v4_tools()),
         (t("doctor.section.python"), _check_python_packages()),
     ]
 

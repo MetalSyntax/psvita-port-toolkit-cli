@@ -50,3 +50,11 @@ function needs an ELF/`.so` path resolved against THIS project's specific layout
 while over a large dump; re-running it as a side effect of loading a browser tab would be a
 surprising, slow default. Analyzing a fresh dump stays a deliberate action in the TUI/CLI
 (`psvita-toolkit analyze`); the dashboard is a viewer for what's already there.
+
+## Why the Performance tab reuses `_LogBroadcaster` for a second, unrelated sample shape
+
+`/ws/perf` needed the exact same "fan one JSON dict out to every connected socket" behavior
+`/ws/logs` already had -- the class was already generic over the payload shape (it just calls
+`json.dumps()` on whatever dict it's given), so giving it a second instance (`perf_broadcaster`)
+for `perf_telemetry.py`'s FRAME/CORES samples was the whole change; no new broadcasting class was
+needed. See `perf_telemetry.py`'s own dev-notes for why there's no GPU counter behind the graph.

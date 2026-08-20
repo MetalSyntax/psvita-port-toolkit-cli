@@ -17,7 +17,7 @@ source is either the real console over the network (live UDP logs via
 this project's own local files (crash dumps, LiveArea assets, generated
 touch-map C code).
 
-Four independent things, each its own tab in the single-page dashboard:
+Six independent things, each its own tab in the single-page dashboard:
 1. Live logs -- reuses `debugnet_server.run_live_log_server()` unchanged
    (via its `on_line` callback) in a background thread, fanning every line
    out to every connected browser tab over `/ws/logs`.
@@ -33,6 +33,10 @@ Four independent things, each its own tab in the single-page dashboard:
    exporting a reviewable `touch_bindings.c`/`.h` pair in raw front-panel
    touch-panel units (`sceTouchPeek`'s actual 1920x1088 coordinate space,
    NOT screen-pixel 960x544 -- see `_export_touch_map()`).
+6. Performance -- reuses `perf_telemetry.run_perf_telemetry()` the same way
+   as live logs, fanning FRAME/CORES samples out over `/ws/perf` for a
+   rolling FPS readout -- see `perf_telemetry.py` for why there's no GPU
+   counter here.
 """
 
 import base64
@@ -48,6 +52,7 @@ from . import debugnet_server
 from . import ftp_ops
 from . import i18n
 from . import livearea
+from . import perf_telemetry
 from . import tui
 from .i18n import t
 from .tui import C
@@ -412,15 +417,18 @@ def _export_touch_map(project_cfg, bindings, screenshot_w, screenshot_h):
 # HTTP server
 # ---------------------------------------------------------------------------
 
-def _make_handler(project_cfg, global_cfg, broadcaster):
+def _make_handler(project_cfg, global_cfg, broadcaster, perf_broadcaster):
     """!
     @brief Build a `BaseHTTPRequestHandler` subclass closed over this
-           dashboard session's `project_cfg`/`broadcaster` (the stdlib
+           dashboard session's `project_cfg`/broadcasters (the stdlib
            handler API takes a class, not an instance, so this is the usual
            closure-factory workaround).
     @param project_cfg Per-project config dict.
     @param global_cfg Global config dict.
-    @param broadcaster This session's `_LogBroadcaster`.
+    @param broadcaster This session's `_LogBroadcaster` for `/ws/logs`.
+    @param perf_broadcaster This session's `_LogBroadcaster` for `/ws/perf`
+           (same class, reused for a different sample shape -- it's already
+           generic over "broadcast this JSON dict to every connected socket").
     @return A ready-to-serve `BaseHTTPRequestHandler` subclass.
     """
 
@@ -444,7 +452,7 @@ def _make_handler(project_cfg, global_cfg, broadcaster):
             self.end_headers()
             self.wfile.write(body)
 
-        def _handle_ws_upgrade(self):
+        def _handle_ws_upgrade(self, target_broadcaster):
             key = self.headers.get("Sec-WebSocket-Key")
             if not key:
                 self.send_error(400, "Missing Sec-WebSocket-Key")
@@ -458,7 +466,7 @@ def _make_handler(project_cfg, global_cfg, broadcaster):
             )
             self.wfile.write(response.encode("ascii"))
             sock = self.connection
-            broadcaster.add(sock)
+            target_broadcaster.add(sock)
             try:
                 while True:
                     opcode, _payload = _ws_read_frame(sock)
@@ -467,11 +475,13 @@ def _make_handler(project_cfg, global_cfg, broadcaster):
             except OSError:
                 pass
             finally:
-                broadcaster.remove(sock)
+                target_broadcaster.remove(sock)
 
         def do_GET(self):
             if self.path == "/ws/logs":
-                self._handle_ws_upgrade()
+                self._handle_ws_upgrade(broadcaster)
+            elif self.path == "/ws/perf":
+                self._handle_ws_upgrade(perf_broadcaster)
             elif self.path == "/" or self.path == "/index.html":
                 self._send_html(_DASHBOARD_HTML)
             elif self.path == "/api/status":
@@ -520,7 +530,8 @@ def run_dashboard_server(project_cfg, global_cfg, host="127.0.0.1", port=DEFAULT
     @param port TCP port for the HTTP server.
     """
     broadcaster = _LogBroadcaster()
-    handler_cls = _make_handler(project_cfg, global_cfg, broadcaster)
+    perf_broadcaster = _LogBroadcaster()
+    handler_cls = _make_handler(project_cfg, global_cfg, broadcaster, perf_broadcaster)
 
     try:
         httpd = ThreadingHTTPServer((host, port), handler_cls)
@@ -531,12 +542,22 @@ def run_dashboard_server(project_cfg, global_cfg, host="127.0.0.1", port=DEFAULT
     def _on_log_line(timestamp, level, text):
         broadcaster.broadcast({"timestamp": timestamp, "level": level, "text": text})
 
+    def _on_perf_sample(kind, value):
+        perf_broadcaster.broadcast({"kind": kind, "value": value})
+
     log_thread = threading.Thread(
         target=debugnet_server.run_live_log_server,
         kwargs={"project_cfg": project_cfg, "on_line": _on_log_line},
         daemon=True,
     )
     log_thread.start()
+
+    perf_thread = threading.Thread(
+        target=perf_telemetry.run_perf_telemetry,
+        kwargs={"project_cfg": project_cfg, "on_sample": _on_perf_sample},
+        daemon=True,
+    )
+    perf_thread.start()
 
     print(t("dashboard.listening", port=port))
     print(f"{C.DIM}{t('dashboard.stop_hint')}{C.RESET}")
@@ -618,6 +639,7 @@ _DASHBOARD_HTML = """<!doctype html>
     <button data-tab="crashes">Crashes</button>
     <button data-tab="assets">Assets</button>
     <button data-tab="touch">Touch Mapper</button>
+    <button data-tab="perf">Performance</button>
   </nav>
 </header>
 <main>
@@ -664,6 +686,22 @@ _DASHBOARD_HTML = """<!doctype html>
         <span id="tm-status" style="color:var(--dim);"></span>
       </div>
       <div id="tm-zones"></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-perf">
+    <div class="panel">
+      <p style="color:var(--dim);margin-top:0;">Frame time from the real console (no GPU vertex/fillrate
+      counters -- there's no public vitasdk API exposing those; frame time is the honest, actually
+      available signal for frame-pacing). Requires the game to call perf_telemetry_frame_begin()/_end()
+      -- see the Utilities menu to generate the hooks.</p>
+      <div style="display:flex;gap:24px;margin-bottom:10px;">
+        <div><span style="color:var(--dim);">FPS (avg, last 120)</span><div id="perf-fps" style="font-size:28px;font-weight:600;">--</div></div>
+        <div><span style="color:var(--dim);">Frame p95</span><div id="perf-p95" style="font-size:28px;font-weight:600;">--</div></div>
+        <div><span style="color:var(--dim);">Stutters</span><div id="perf-stutters" style="font-size:28px;font-weight:600;">--</div></div>
+      </div>
+      <canvas id="perf-canvas" width="960" height="160" style="width:100%;background:#010409;border:1px solid var(--border);border-radius:6px;"></canvas>
+      <div style="margin-top:10px;color:var(--dim);font-size:12px;">Cores (best-effort sample, current thread id per core): <span id="perf-cores">--</span></div>
     </div>
   </section>
 </main>
@@ -828,6 +866,64 @@ document.getElementById("tm-export").addEventListener("click", async () => {
 });
 loadScreenshot();
 drawCanvas();
+
+// ---- Performance ----
+let frameTimesUs = [];
+const perfCanvas = document.getElementById("perf-canvas");
+const perfCtx = perfCanvas.getContext("2d");
+
+function drawPerfGraph() {
+  perfCtx.clearRect(0, 0, perfCanvas.width, perfCanvas.height);
+  const window_ = frameTimesUs.slice(-300);
+  if (!window_.length) return;
+  const maxUs = Math.max(...window_, 16667 * 2);
+  perfCtx.strokeStyle = "#3fb950";
+  perfCtx.beginPath();
+  window_.forEach((us, i) => {
+    const x = (i / window_.length) * perfCanvas.width;
+    const y = perfCanvas.height - (us / maxUs) * perfCanvas.height;
+    if (i === 0) perfCtx.moveTo(x, y); else perfCtx.lineTo(x, y);
+  });
+  perfCtx.stroke();
+  // 60 FPS reference line (16.67ms)
+  const refY = perfCanvas.height - (16667 / maxUs) * perfCanvas.height;
+  perfCtx.strokeStyle = "#30363d";
+  perfCtx.beginPath();
+  perfCtx.moveTo(0, refY);
+  perfCtx.lineTo(perfCanvas.width, refY);
+  perfCtx.stroke();
+}
+
+function refreshPerfStats() {
+  const window_ = frameTimesUs.slice(-120);
+  if (!window_.length) return;
+  const avgUs = window_.reduce((a, b) => a + b, 0) / window_.length;
+  const fps = avgUs ? 1000000 / avgUs : 0;
+  const sorted = [...window_].sort((a, b) => a - b);
+  const p95 = sorted[Math.floor(sorted.length * 0.95)] / 1000;
+  const stutters = window_.filter(v => v > avgUs * 2).length;
+  document.getElementById("perf-fps").textContent = fps.toFixed(1);
+  document.getElementById("perf-p95").textContent = p95.toFixed(1) + " ms";
+  document.getElementById("perf-stutters").textContent = stutters;
+}
+
+function connectPerf() {
+  const ws = new WebSocket("ws://" + location.host + "/ws/perf");
+  ws.onclose = () => setTimeout(connectPerf, 2000);
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    const sample = JSON.parse(ev.data);
+    if (sample.kind === "FRAME") {
+      frameTimesUs.push(sample.value);
+      if (frameTimesUs.length > 600) frameTimesUs = frameTimesUs.slice(-600);
+      refreshPerfStats();
+      drawPerfGraph();
+    } else if (sample.kind === "CORES") {
+      document.getElementById("perf-cores").textContent = sample.value.join(", ");
+    }
+  };
+}
+connectPerf();
 </script>
 </body>
 </html>

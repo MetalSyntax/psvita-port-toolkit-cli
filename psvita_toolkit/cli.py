@@ -177,6 +177,40 @@ def build_parser():
     p_web.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_web.add_argument("--port", type=int, help="Local HTTP port (default: 8080).")
 
+    p_gdb = sub.add_parser("gdb-map", help="Generate a .gdb symbol-map script for gdb-multiarch against a real gdbstub.")
+    p_gdb.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_gdb.add_argument("--gdb-port", type=int, help="gdbstub port on the Vita (default: 10001).")
+    p_gdb.add_argument("--so-base", help="Runtime base address of the .so, hex (e.g. 0x81000000), if already known.")
+
+    p_transcode = sub.add_parser("transcode-assets", help="Batch-transcode textures (.rawtex + mipmaps) and/or audio (.at9).")
+    p_transcode.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_transcode.add_argument("--textures-dir", help="Source folder of images to transcode.")
+    p_transcode.add_argument("--audio-dir", help="Source folder of .wav/.mp3/.ogg/.at9 files to transcode.")
+    p_transcode.add_argument("--out-dir", help="Output directory (default: <project>/extras/native_assets).")
+
+    p_perf = sub.add_parser("perf-telemetry", help="Listen for live frame-pacing/core telemetry from the real console, or generate the C-side hooks.")
+    p_perf.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_perf.add_argument("--port", type=int, help="UDP port to listen on (default: 9996).")
+    p_perf.add_argument("--gen-hooks", action="store_true", help="Generate perf_telemetry_hooks.c/.h instead of listening.")
+    p_perf.add_argument("--host-ip", help="Dev machine IP to bake into the generated hooks (only with --gen-hooks).")
+    p_perf.add_argument("--out-dir", help="Output directory for generated hooks (only with --gen-hooks).")
+
+    p_soak = sub.add_parser("soak-test", help="Listen for a soak-test heartbeat from the real console, or generate the C-side hooks.")
+    p_soak.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_soak.add_argument("--port", type=int, help="UDP port to listen on (default: 9995).")
+    p_soak.add_argument("--hang-timeout", type=int, help="Seconds without a heartbeat to flag a hang (default: 30).")
+    p_soak.add_argument("--gen-hooks", action="store_true", help="Generate monkey_test_hooks.c/.h instead of listening.")
+    p_soak.add_argument("--host-ip", help="Dev machine IP to bake into the generated hooks (only with --gen-hooks).")
+    p_soak.add_argument("--out-dir", help="Output directory for generated hooks (only with --gen-hooks).")
+
+    p_auto = sub.add_parser("auto-bootstrap", help="Assisted build/deploy/crash-check loop against the real console.")
+    p_auto.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_auto.add_argument("--max-iterations", type=int, help="Stop after this many build attempts (default: 5).")
+    p_auto.add_argument("--run-seconds", type=int, help="Seconds to wait after each deploy before checking for a crash (default: 25).")
+    p_auto.add_argument("--preset", default="debug",
+                         choices=["debug", "release", "relwithdebinfo", "minsizerel"],
+                         help="Build preset (default: debug).")
+
     return parser
 
 
@@ -517,6 +551,113 @@ def _cmd_web(args):
     return 0
 
 
+def _cmd_gdb_map(args):
+    """!
+    @brief `gdb-map` subcommand handler: generate the GDB symbol-map script.
+    @param args Parsed CLI args (`project`, `gdb_port`, `so_base`).
+    @return `1` on missing project, else `0`.
+    """
+    from . import gdb_bridge
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    so_base = None
+    if args.so_base:
+        try:
+            so_base = int(args.so_base, 16)
+        except ValueError:
+            return _fail(f"--so-base '{args.so_base}' is not a valid hex address.")
+    gdb_bridge.generate_symbol_map(project_cfg, gdb_port=args.gdb_port or gdb_bridge.DEFAULT_GDB_PORT, so_base=so_base)
+    return 0
+
+
+def _cmd_transcode_assets(args):
+    """!
+    @brief `transcode-assets` subcommand handler: batch-transcode textures and/or audio.
+    @param args Parsed CLI args (`project`, `textures_dir`, `audio_dir`, `out_dir`).
+    @return `1` on missing project or if neither `--textures-dir`/`--audio-dir` was given, else `0`.
+    """
+    from . import asset_transcoder
+    global_cfg, err = _load_global_config()
+    if err:
+        return _fail(err)
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    if not args.textures_dir and not args.audio_dir:
+        return _fail("transcode-assets requires at least one of --textures-dir/--audio-dir.")
+    out_dir = args.out_dir or (Path(project_cfg["_project_dir"]) / "extras" / "native_assets")
+    if args.textures_dir:
+        asset_transcoder.transcode_texture_dir(args.textures_dir, out_dir)
+    if args.audio_dir:
+        asset_transcoder.transcode_audio_dir(args.audio_dir, out_dir, global_cfg)
+    return 0
+
+
+def _cmd_perf_telemetry(args):
+    """!
+    @brief `perf-telemetry` subcommand handler: run the UDP telemetry listener
+           until interrupted, or (with `--gen-hooks`) generate the C-side hooks.
+    @param args Parsed CLI args (`project`, `port`, `gen_hooks`, `host_ip`, `out_dir`).
+    @return `1` on missing project, else `0`.
+    """
+    from . import perf_telemetry
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    if args.gen_hooks:
+        perf_telemetry.generate_perf_hooks(
+            project_cfg, host_ip=args.host_ip, port=args.port or perf_telemetry.DEFAULT_PORT, out_dir=args.out_dir)
+    else:
+        perf_telemetry.run_perf_telemetry(project_cfg, port=args.port or perf_telemetry.DEFAULT_PORT)
+    return 0
+
+
+def _cmd_soak_test(args):
+    """!
+    @brief `soak-test` subcommand handler: run the heartbeat listener until
+           interrupted, or (with `--gen-hooks`) generate the C-side hooks.
+    @param args Parsed CLI args (`project`, `port`, `hang_timeout`, `gen_hooks`, `host_ip`, `out_dir`).
+    @return `1` on missing project, else `0`.
+    """
+    from . import monkey_tester
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    if args.gen_hooks:
+        monkey_tester.generate_monkey_hooks(
+            project_cfg, host_ip=args.host_ip, port=args.port or monkey_tester.DEFAULT_PORT, out_dir=args.out_dir)
+    else:
+        monkey_tester.run_soak_test(
+            project_cfg, port=args.port or monkey_tester.DEFAULT_PORT,
+            hang_timeout=args.hang_timeout or monkey_tester.DEFAULT_HANG_TIMEOUT)
+    return 0
+
+
+def _cmd_auto_bootstrap(args):
+    """!
+    @brief `auto-bootstrap` subcommand handler: run the assisted build/deploy/crash-check loop.
+    @param args Parsed CLI args (`project`, `max_iterations`, `run_seconds`, `preset`).
+    @return `1` on missing config/project, `0` if the loop reported stability,
+            else `1` (stopped early: build failure, no progress, or max iterations).
+    """
+    from . import auto_synth
+    global_cfg, err = _load_global_config()
+    if err:
+        return _fail(err)
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+    ok = auto_synth.run_auto_bootstrap(
+        project_cfg, global_cfg,
+        max_iterations=args.max_iterations or auto_synth.DEFAULT_MAX_ITERATIONS,
+        run_seconds=args.run_seconds or auto_synth.DEFAULT_RUN_SECONDS,
+        preset=args.preset,
+    )
+    return 0 if ok else 1
+
+
 _HANDLERS = {
     "doctor": _cmd_doctor,
     "build": _cmd_build,
@@ -534,6 +675,11 @@ _HANDLERS = {
     "align-check": _cmd_align_check,
     "mem-profile": _cmd_mem_profile,
     "web": _cmd_web,
+    "gdb-map": _cmd_gdb_map,
+    "transcode-assets": _cmd_transcode_assets,
+    "perf-telemetry": _cmd_perf_telemetry,
+    "soak-test": _cmd_soak_test,
+    "auto-bootstrap": _cmd_auto_bootstrap,
 }
 
 

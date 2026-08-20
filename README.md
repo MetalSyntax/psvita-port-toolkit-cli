@@ -92,10 +92,28 @@ Una vez dentro de un proyecto, todo es un menú de flechas navegable:
 - **Web Dashboard Local** -- panel en el navegador (sin dependencias nuevas, WebSocket hecho a mano)
   con logs en vivo, estado de conexión con la consola, visor de crash dumps, inspector de assets de
   LiveArea, y el **mapeador visual Touch-to-Pad** (dibujás las zonas sobre una captura de pantalla y
-  exporta `touch_bindings.c` ya escalado a las unidades reales de `sceTouchPeek`).
+  exporta `touch_bindings.c` ya escalado a las unidades reales de `sceTouchPeek`), más una pestaña
+  de **Performance** con frame-pacing en vivo (FPS/p95/stutters) desde la consola real.
+- **Telemetría de Rendimiento** -- frame-pacing en vivo por UDP desde la consola real (sin
+  contador de GPU inventado -- PowerVR no expone eso a homebrew; frame time es la métrica honesta
+  disponible) y muestreo best-effort de qué hilo corre en cada uno de los 4 cores.
+- **Monkey Testing / Soak Test** -- corridas largas sin supervisión en la consola real con
+  heartbeat por UDP para detectar hangs (no solo crashes), certificando `Tested: N horas sin
+  incidentes` en `PORTING_PLAN.md` solo cuando es cierto. Corré `Profiler de Memoria` en paralelo
+  para el "Leak Sentinel" del plan (no se duplica esa lógica acá).
+- **Auto-Synthesizer** -- bootstrap asistido: compila, despliega, espera, y si la consola real
+  larga un crash nuevo regenera candidatos de stub JNI / parches de telemetría y reintenta -- se
+  detiene solo (con reporte + contexto para IA) si el build falla, no hay progreso medible, o se
+  llega al máximo de iteraciones. No es un loop autónomo "de verdad" (eso requeriría confiar en
+  candidatos sin revisar) -- ver `docs/dev-notes/auto_synth.md`.
+- **Ecosistema Multi-Port** -- visión global de todos los ports adoptados bajo BASE_DIR, clasificación
+  de familias de motor y sincronización de componentes compartidos (`falso_jni`, audio, shaders).
 - **Utilidades** -- auto-parcheo y neutralización de SDKs de telemetría/IAP, analizador de alineación
-  de memoria ARMv7 (`ldrd`/`vld1`/...), exportador de contexto para Copiloto IA, limpieza de basura de
-  macOS, re-decompilación, tests de host, búsqueda de símbolos, verificación de assets, traducción de docs.
+  de memoria ARMv7 (`ldrd`/`vld1`/...), GDB Bridge (mapa de símbolos para `gdb-multiarch` contra un
+  gdbstub real), transcodificador de assets nativos (texturas `.rawtex` + mipmaps, con compresión
+  GPU real si hay `PVRTexToolCLI`/`compressonatorcli`; audio `.at9` en lote), exportador de contexto
+  para Copiloto IA, limpieza de basura de macOS, re-decompilación, tests de host, búsqueda de
+  símbolos, verificación de assets, traducción de docs.
 - **Configuración del proyecto** / **Cambiar de proyecto** / **Salir**.
 
 Navegación consistente en **todo** el toolkit: `↑/↓` mover, `Enter` elegir, `1-9` salto directo,
@@ -121,9 +139,14 @@ psvita_toolkit/
   so_patcher.py       # detección + stubs de neutralización de SDKs de telemetría/IAP
   mem_align_analyzer.py  # riesgos de alineación ARMv7 (ldrd/vld1/...) + struct packing
   mem_profiler.py     # profiler de heap en vivo (UDP, consola real) + generador de hooks C
-  dashboard.py        # web dashboard local (logs, estado, crashes, assets, touch mapper)
+  dashboard.py        # web dashboard local (logs, estado, crashes, assets, touch mapper, perf)
   ecosystem.py        # vista multi-port y sincronización de componentes compartidos
   context_feeder.py   # exportador de contexto de crash para copilotos de IA
+  gdb_bridge.py       # exportador de mapa de símbolos para gdb-multiarch (consola real)
+  asset_transcoder.py # texturas .rawtex + mipmaps (con compresión GPU real si hay encoder) + audio .at9 en lote
+  perf_telemetry.py   # frame-pacing + muestreo de cores en vivo (UDP, consola real)
+  monkey_tester.py    # soak test con heartbeat (UDP, consola real) + hooks de entrada aleatoria
+  auto_synth.py       # bootstrap asistido: build + deploy + crash-check loop en consola real
 ```
 
 ## Modo headless (CLI sin TUI)
@@ -144,6 +167,12 @@ psvita-toolkit align-check --project <ruta>                         # riesgos de
 psvita-toolkit mem-profile --project <ruta>                         # escuchar heap en vivo (consola real)
 psvita-toolkit mem-profile --project <ruta> --gen-hooks              # generar mem_profiler_hooks.c/.h
 psvita-toolkit web --project <ruta>                                  # dashboard local en el navegador
+psvita-toolkit gdb-map --project <ruta>                              # script .gdb para gdb-multiarch
+psvita-toolkit transcode-assets --project <ruta> --textures-dir assets --audio-dir assets/sfx
+psvita-toolkit perf-telemetry --project <ruta>                       # escuchar frame-pacing en vivo
+psvita-toolkit perf-telemetry --project <ruta> --gen-hooks            # generar perf_telemetry_hooks.c/.h
+psvita-toolkit soak-test --project <ruta>                            # escuchar heartbeat de soak test
+psvita-toolkit auto-bootstrap --project <ruta>                       # bootstrap asistido en consola real
 ```
 
 `--project` por defecto es el directorio actual. Cada subcomando devuelve código de salida `0`

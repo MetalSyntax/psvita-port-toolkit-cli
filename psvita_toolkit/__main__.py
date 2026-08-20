@@ -16,6 +16,8 @@ See `docs/dev-notes/__main__.md` for the rationale behind this structure.
 
 from pathlib import Path
 
+from . import asset_transcoder
+from . import auto_synth
 from . import build_deploy
 from . import config as cfgmod
 from . import context_feeder
@@ -25,11 +27,14 @@ from . import debugnet_server
 from . import doctor
 from . import ecosystem
 from . import ftp_ops
+from . import gdb_bridge
 from . import i18n
 from . import jni_analyzer
 from . import livearea
 from . import mem_align_analyzer
 from . import mem_profiler
+from . import monkey_tester
+from . import perf_telemetry
 from . import project
 from . import so_patcher
 from . import tui
@@ -184,6 +189,16 @@ STRINGS = {
         "en": "ARMv7 memory alignment analyzer (ldrd/vld1/...)",
         "pt": "Analisador de alinhamento de memória ARMv7 (ldrd/vld1/...)",
     },
+    "main.utils.gdb_bridge": {
+        "es": "GDB Bridge (exportar mapa de símbolos para gdb-multiarch)",
+        "en": "GDB Bridge (export a symbol map for gdb-multiarch)",
+        "pt": "GDB Bridge (exportar mapa de símbolos para gdb-multiarch)",
+    },
+    "main.utils.asset_transcoder": {
+        "es": "Transcodificador de Assets Nativos (texturas .rawtex + audio .at9 en lote)",
+        "en": "Native Asset Transcoder (batch .rawtex textures + .at9 audio)",
+        "pt": "Transcodificador de Assets Nativos (texturas .rawtex + áudio .at9 em lote)",
+    },
     "main.utils.export_context": {
         "es": "Exportar contexto de crash para Copiloto IA (Claude/Gemini/LLMs)",
         "en": "Export crash context for AI Copilot (Claude/Gemini/LLMs)",
@@ -203,6 +218,21 @@ STRINGS = {
         "es": "Web Dashboard Local (logs, estado, crashes, assets, touch mapper)",
         "en": "Local Web Dashboard (logs, status, crashes, assets, touch mapper)",
         "pt": "Web Dashboard Local (logs, status, crashes, assets, touch mapper)",
+    },
+    "main.menu.perf_telemetry": {
+        "es": "Telemetría de Rendimiento (frame-pacing, cores -- consola real)",
+        "en": "Performance Telemetry (frame-pacing, cores -- real console)",
+        "pt": "Telemetria de Desempenho (frame-pacing, cores -- console real)",
+    },
+    "main.menu.monkey_tester": {
+        "es": "Monkey Testing / Soak Test (consola real)",
+        "en": "Monkey Testing / Soak Test (real console)",
+        "pt": "Monkey Testing / Soak Test (console real)",
+    },
+    "main.menu.auto_synth": {
+        "es": "Auto-Synthesizer (bootstrap asistido: build+deploy+crash-loop)",
+        "en": "Auto-Synthesizer (assisted build+deploy+crash-loop)",
+        "pt": "Auto-Synthesizer (bootstrap assistido: build+deploy+crash-loop)",
     },
     "main.ask_reference_dir": {
         "es": "Carpeta local de referencia de assets (relativa al proyecto) [assets]: ",
@@ -363,6 +393,8 @@ def _utils_submenu(project_cfg, global_cfg):
         (t("main.utils.doctor"), lambda: doctor.run_doctor(global_cfg)),
         (t("main.utils.so_patcher"), lambda: so_patcher.patch_menu(project_cfg, global_cfg)),
         (t("main.utils.align_check"), lambda: mem_align_analyzer.alignment_menu(project_cfg, global_cfg)),
+        (t("main.utils.gdb_bridge"), lambda: gdb_bridge.gdb_bridge_menu(project_cfg, global_cfg)),
+        (t("main.utils.asset_transcoder"), lambda: asset_transcoder.transcoder_menu(project_cfg, global_cfg)),
         (t("main.utils.export_context"), lambda: context_feeder.export_context_menu(project_cfg, global_cfg)),
         (t("main.utils.clean_macos_junk"), lambda: utils.clean_macos_junk(project_cfg["_project_dir"])),
         (t("main.utils.decompile_all"), lambda: utils.decompile_all(project_cfg, global_cfg)),
@@ -447,6 +479,9 @@ def show_project_menu(project_cfg, global_cfg):
         (t("main.menu.ecosystem"), lambda: ecosystem.ecosystem_menu(project_cfg, global_cfg)),
         (t("main.menu.mem_profiler"), lambda: mem_profiler.profiler_menu(project_cfg, global_cfg)),
         (t("main.menu.dashboard"), lambda: dashboard.dashboard_menu(project_cfg, global_cfg)),
+        (t("main.menu.perf_telemetry"), lambda: perf_telemetry.perf_telemetry_menu(project_cfg, global_cfg)),
+        (t("main.menu.monkey_tester"), lambda: monkey_tester.monkey_tester_menu(project_cfg, global_cfg)),
+        (t("main.menu.auto_synth"), lambda: auto_synth.auto_synth_menu(project_cfg, global_cfg)),
         (t("main.menu.utilities"),
          lambda: _utils_submenu(project_cfg, global_cfg)),
         (t("main.menu.console_profiles"), lambda: ftp_ops.console_profiles_menu(project_cfg)),

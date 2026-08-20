@@ -1057,6 +1057,36 @@ def _download_latest(ftp, project_cfg, want_dump=True, want_log=True):
             print(f"{C.YELLOW}{t('ftp_ops.no_logs_found_alt', dir=project_cfg.get('vita_logs_dir'))}{C.RESET}")
 
 
+def fetch_latest_dump_headless(project_cfg, global_cfg):
+    """!
+    @brief Headless equivalent of `_download_latest(want_dump=True)`: connect,
+           download the newest remote crash dump if there is one, and return
+           without ever prompting -- `_offer_analyze()`'s `tui.confirm()`
+           would block forever with no TTY attached.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict.
+    @return Local `Path` to the downloaded dump, or `None` if the console is
+            unreachable or has no crash dump waiting.
+    @note Used by `auto_synth.py`'s bootstrap loop, which decides for itself
+          whether to analyze the result -- this function only fetches.
+    """
+    ftp = _connect_with_retry(project_cfg, global_cfg)
+    if not ftp:
+        return None
+    try:
+        dumps = list_remote_dumps(ftp, project_cfg)
+        if not dumps:
+            return None
+        name, _ = dumps[0]
+        local_path = _local_logs_dir(project_cfg) / f"{project_cfg['slug']}-{name}"
+        _download_remote_file(ftp, project_cfg.get("vita_data_dir"), name, local_path)
+        return local_path
+    except all_errors:
+        return None
+    finally:
+        _quit(ftp)
+
+
 def _offer_analyze(project_cfg, dump_path):
     """!
     @brief Offer to run the built-in crash analyzer on a just-downloaded dump.
