@@ -66,27 +66,37 @@ Después de eso, cada vez que abrís el toolkit elegís:
 
 Una vez dentro de un proyecto, todo es un menú de flechas navegable:
 
-- 🔨 **Compilar y Desplegar** -- asistente guiado: destino (PS Vita física / solo
+- **Compilar y Desplegar** -- asistente guiado: destino (PS Vita física / solo
   compilar) → preset de build → despliegue automático según el destino. Los presets universales
   (Debug/Release/RelWithDebInfo/MinSizeRel) siempre están, y además se **auto-descubren** banderas
   extra grepeando el `build.sh` del proyecto activo, o las opciones `option(...)` del propio
   `CMakeLists.txt` si el proyecto no tiene `build.sh` (port legacy) -- así ningún flag específico
   de un motor (NEON, dirty-rect, downsample, turbo, lo que sea) queda hardcodeado en la
   herramienta genérica; simplemente aparece si ESE port lo define.
-- ⚡📦 **Subir a la PS Vita física** por FTP -- solo el `eboot.bin` (rápido) o el VPK completo.
-- 📥 **Descargar logs / crash dumps** -- tres modos: el último automático, elegir uno específico
+- **Subir a la PS Vita física** por FTP -- solo el `eboot.bin` (rápido) o el VPK completo.
+- **Descargar logs / crash dumps** -- tres modos: el último automático, elegir uno específico
   de lo que hay *ahora* en la consola, o navegar el **historial local** de lo ya descargado antes
   a este proyecto.
-- 🔍 **Analizar un crash dump** -- wrapper de `vita-parse-core` con resolución automática de
+- **Analizar un crash dump** -- wrapper de `vita-parse-core` con resolución automática de
   símbolos, desensamblado alrededor de PC/LR, y reconstrucción de la pila de llamadas.
-- 🎨 **LiveArea** -- adapta cualquier PNG a las specs exactas de Vita (bg0/pic0/icon0/startup,
+- **LiveArea** -- adapta cualquier PNG a las specs exactas de Vita (bg0/pic0/icon0/startup,
   8-bit indexado, límites de tamaño) con recorte/fit/stretch, directo a `extras/livearea/` del
   proyecto.
-- 🧩 **Shaders** -- sincronizar GLSL volcado ↔ CG traducido, limpieza de boilerplate GLES, chequeo
+- **Shaders** -- sincronizar GLSL volcado ↔ CG traducido, limpieza de boilerplate GLES, chequeo
   de `libshacccg.suprx`.
-- 🧰 **Utilidades** -- limpieza de basura de macOS, re-decompilación, tests de host del proyecto,
-  búsqueda de símbolos por patrón, verificación de assets (local vs. consola), traducción de docs.
-- ⚙️ **Configuración del proyecto** / 🔁 **Cambiar de proyecto** / ❌ **Salir**.
+- **Ecosistema Multi-Port** -- visión global de todos los ports adoptados bajo BASE_DIR, clasificación
+  de familias de motor y sincronización de componentes compartidos (`falso_jni`, audio, shaders).
+- **Profiler de Memoria en Vivo** -- métricas de heap en vivo por UDP desde la **consola real**
+  (no hay Vita3K de por medio) y detección de fugas relativa a checkpoints de nivel/escena; también
+  genera los wrappers C (`mem_profiler_hooks.c/.h`) para registrar en la tabla de imports de tu soloader.
+- **Web Dashboard Local** -- panel en el navegador (sin dependencias nuevas, WebSocket hecho a mano)
+  con logs en vivo, estado de conexión con la consola, visor de crash dumps, inspector de assets de
+  LiveArea, y el **mapeador visual Touch-to-Pad** (dibujás las zonas sobre una captura de pantalla y
+  exporta `touch_bindings.c` ya escalado a las unidades reales de `sceTouchPeek`).
+- **Utilidades** -- auto-parcheo y neutralización de SDKs de telemetría/IAP, analizador de alineación
+  de memoria ARMv7 (`ldrd`/`vld1`/...), exportador de contexto para Copiloto IA, limpieza de basura de
+  macOS, re-decompilación, tests de host, búsqueda de símbolos, verificación de assets, traducción de docs.
+- **Configuración del proyecto** / **Cambiar de proyecto** / **Salir**.
 
 Navegación consistente en **todo** el toolkit: `↑/↓` mover, `Enter` elegir, `1-9` salto directo,
 `0`/`Q` volver un nivel, **`M` va directo al menú principal del proyecto desde cualquier
@@ -106,7 +116,39 @@ psvita_toolkit/
   crash_analyzer.py   # analizador de .psp2dmp (vita-parse-core)
   utils.py            # limpieza, re-decompilación, tests, símbolos, docs
   gen_docs.py         # generación de skeletons Doxygen y docs/api/ markdown
+  doctor.py           # diagnóstico del entorno (VITASDK, Docker, jadx, CMake/Ninja, paquetes Python)
+  cli.py              # modo headless: `psvita-toolkit <subcomando> ...` sin abrir la TUI
+  so_patcher.py       # detección + stubs de neutralización de SDKs de telemetría/IAP
+  mem_align_analyzer.py  # riesgos de alineación ARMv7 (ldrd/vld1/...) + struct packing
+  mem_profiler.py     # profiler de heap en vivo (UDP, consola real) + generador de hooks C
+  dashboard.py        # web dashboard local (logs, estado, crashes, assets, touch mapper)
+  ecosystem.py        # vista multi-port y sincronización de componentes compartidos
+  context_feeder.py   # exportador de contexto de crash para copilotos de IA
 ```
+
+## Modo headless (CLI sin TUI)
+
+Además de la TUI interactiva, `psvita-toolkit <subcomando> ...` corre acciones puntuales
+directo desde la terminal, un editor, un alias, o un pipeline de CI -- sin abrir ningún menú:
+
+```bash
+psvita-toolkit doctor                                            # chequear el entorno
+psvita-toolkit build --project <ruta> --preset debug              # compilar
+psvita-toolkit deploy --project <ruta> --eboot --yes               # subir solo eboot.bin
+psvita-toolkit deploy --project <ruta> --vpk                        # subir el VPK más nuevo
+psvita-toolkit analyze <ruta/psp2core-xxx.dmp> --project <ruta>    # analizar un crash dump
+psvita-toolkit init --apk juego.apk --name "Mi Juego"              # crear un port nuevo
+psvita-toolkit livearea --project <ruta> --auto <carpeta_imagenes> # LiveArea en lote
+psvita-toolkit clean-junk --project <ruta>                          # limpiar basura de macOS
+psvita-toolkit align-check --project <ruta>                         # riesgos de alineación ARMv7
+psvita-toolkit mem-profile --project <ruta>                         # escuchar heap en vivo (consola real)
+psvita-toolkit mem-profile --project <ruta> --gen-hooks              # generar mem_profiler_hooks.c/.h
+psvita-toolkit web --project <ruta>                                  # dashboard local en el navegador
+```
+
+`--project` por defecto es el directorio actual. Cada subcomando devuelve código de salida `0`
+en éxito, distinto de cero si falla -- pensado para scripts, no para reemplazar la TUI. Sin
+ningún subcomando (`psvita-toolkit`, sin argumentos), se abre la TUI de siempre.
 
 Cada port solo necesita un archivo `.psvita-toolkit.json` en su raíz (auto-generado al crear el
 port, o al adoptar uno existente) para que el toolkit sepa operar sobre él. No hace falta ninguna

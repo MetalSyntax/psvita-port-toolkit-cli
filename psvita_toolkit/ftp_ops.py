@@ -17,10 +17,12 @@ download modes.
 
 import socket
 import subprocess
+import sys
 import time
 from ftplib import FTP, all_errors
 from pathlib import Path
 
+from . import config as cfgmod
 from . import tui
 from .tui import C
 from . import i18n
@@ -51,6 +53,81 @@ STRINGS = {
         "es": "[*] Conectando a la PS Vita en {ip}:{port}...",
         "en": "[*] Connecting to the PS Vita at {ip}:{port}...",
         "pt": "[*] Conectando ao PS Vita em {ip}:{port}...",
+    },
+    "ftp_ops.retry_connect": {
+        "es": "[!] Falló la conexión -- reintentando ({attempt}/{retries})...",
+        "en": "[!] Connection failed -- retrying ({attempt}/{retries})...",
+        "pt": "[!] Falha na conexão -- tentando novamente ({attempt}/{retries})...",
+    },
+    "ftp_ops.console_menu_title": {
+        "es": "Perfiles de consola",
+        "en": "Console profiles",
+        "pt": "Perfis de console",
+    },
+    "ftp_ops.console_breadcrumb": {
+        "es": "{game_name} › Perfiles de consola",
+        "en": "{game_name} › Console profiles",
+        "pt": "{game_name} › Perfis de console",
+    },
+    "ftp_ops.console_active": {
+        "es": "Consola activa: {ip}:{port}",
+        "en": "Active console: {ip}:{port}",
+        "pt": "Console ativo: {ip}:{port}",
+    },
+    "ftp_ops.console_none_saved": {
+        "es": "(sin perfiles guardados todavía -- 'Agregar perfil' para crear uno)",
+        "en": "(no profiles saved yet -- 'Add profile' to create one)",
+        "pt": "(nenhum perfil salvo ainda -- 'Adicionar perfil' para criar um)",
+    },
+    "ftp_ops.console_add": {
+        "es": "Agregar perfil (ej. OLED, Slim, PSTV)",
+        "en": "Add profile (e.g. OLED, Slim, PSTV)",
+        "pt": "Adicionar perfil (ex. OLED, Slim, PSTV)",
+    },
+    "ftp_ops.console_switch": {
+        "es": "Cambiar de consola activa",
+        "en": "Switch active console",
+        "pt": "Trocar console ativo",
+    },
+    "ftp_ops.console_delete": {
+        "es": "Eliminar perfil",
+        "en": "Delete profile",
+        "pt": "Excluir perfil",
+    },
+    "ftp_ops.console_name_prompt": {
+        "es": "Nombre del perfil (ej. 'OLED'): ",
+        "en": "Profile name (e.g. 'OLED'): ",
+        "pt": "Nome do perfil (ex. 'OLED'): ",
+    },
+    "ftp_ops.console_ip_prompt": {
+        "es": "IP [{default}]: ",
+        "en": "IP [{default}]: ",
+        "pt": "IP [{default}]: ",
+    },
+    "ftp_ops.console_port_prompt": {
+        "es": "Puerto FTP [{default}]: ",
+        "en": "FTP port [{default}]: ",
+        "pt": "Porta FTP [{default}]: ",
+    },
+    "ftp_ops.console_choose_title": {
+        "es": "Elegir un perfil",
+        "en": "Choose a profile",
+        "pt": "Escolher um perfil",
+    },
+    "ftp_ops.console_saved": {
+        "es": "[+] Perfil '{name}' guardado.",
+        "en": "[+] Profile '{name}' saved.",
+        "pt": "[+] Perfil '{name}' salvo.",
+    },
+    "ftp_ops.console_switched": {
+        "es": "[+] Consola activa: '{name}'.",
+        "en": "[+] Active console: '{name}'.",
+        "pt": "[+] Console ativo: '{name}'.",
+    },
+    "ftp_ops.console_deleted": {
+        "es": "[+] Perfil '{name}' eliminado.",
+        "en": "[+] Profile '{name}' deleted.",
+        "pt": "[+] Perfil '{name}' excluído.",
     },
     "ftp_ops.forcing_local_route": {
         "es": "[*] Forzando ruta local vía {ip} (bypass de VPN si hay alguna activa).",
@@ -122,25 +199,15 @@ STRINGS = {
         "en": "[-] No .vpk found in '{build_dir}/'. Build the project first ('Build' option).",
         "pt": "[-] Nenhum .vpk encontrado em '{build_dir}/'. Compile o projeto primeiro (opção 'Compilar').",
     },
+    "ftp_ops.vpk_not_found": {
+        "es": "[-] No existe: {path}",
+        "en": "[-] Doesn't exist: {path}",
+        "pt": "[-] Não existe: {path}",
+    },
     "ftp_ops.vpks_found": {
         "es": "[*] {count} VPK(s) encontrado(s) (más reciente primero):",
         "en": "[*] {count} VPK(s) found (newest first):",
         "pt": "[*] {count} VPK(s) encontrado(s) (mais recente primeiro):",
-    },
-    "ftp_ops.cancel_bracket_option": {
-        "es": "0. [ Cancelar ]",
-        "en": "0. [ Cancel ]",
-        "pt": "0. [ Cancelar ]",
-    },
-    "ftp_ops.choose_vpk_prompt": {
-        "es": "\nElegí el VPK a subir [1-{max}] (Enter = el más reciente, 0 = cancelar): ",
-        "en": "\nPick the VPK to upload [1-{max}] (Enter = most recent, 0 = cancel): ",
-        "pt": "\nEscolha o VPK para enviar [1-{max}] (Enter = o mais recente, 0 = cancelar): ",
-    },
-    "ftp_ops.invalid_option": {
-        "es": "[-] Opción inválida.",
-        "en": "[-] Invalid option.",
-        "pt": "[-] Opção inválida.",
     },
     "ftp_ops.uploading_file": {
         "es": "[*] Subiendo {local} a {dest}...",
@@ -213,34 +280,24 @@ STRINGS = {
         "pt": "O que você quer fazer?",
     },
     "ftp_ops.menu_download_latest": {
-        "es": "1. Descargar el ÚLTIMO log + último crash dump de la consola",
-        "en": "1. Download the LATEST log + latest crash dump from the console",
-        "pt": "1. Baixar o ÚLTIMO log + último crash dump do console",
+        "es": "Descargar el ÚLTIMO log + último crash dump de la consola",
+        "en": "Download the LATEST log + latest crash dump from the console",
+        "pt": "Baixar o ÚLTIMO log + último crash dump do console",
     },
     "ftp_ops.menu_pick_log": {
-        "es": "2. Elegir un log ESPECÍFICO de los que hay ahora en la consola",
-        "en": "2. Pick a SPECIFIC log from what's currently on the console",
-        "pt": "2. Escolher um log ESPECÍFICO dos que estão agora no console",
+        "es": "Elegir un log ESPECÍFICO de los que hay ahora en la consola",
+        "en": "Pick a SPECIFIC log from what's currently on the console",
+        "pt": "Escolher um log ESPECÍFICO dos que estão agora no console",
     },
     "ftp_ops.menu_pick_dump": {
-        "es": "3. Elegir un crash dump ESPECÍFICO de los que hay ahora en la consola",
-        "en": "3. Pick a SPECIFIC crash dump from what's currently on the console",
-        "pt": "3. Escolher um crash dump ESPECÍFICO dos que estão agora no console",
+        "es": "Elegir un crash dump ESPECÍFICO de los que hay ahora en la consola",
+        "en": "Pick a SPECIFIC crash dump from what's currently on the console",
+        "pt": "Escolher um crash dump ESPECÍFICO dos que estão agora no console",
     },
     "ftp_ops.menu_local_history": {
-        "es": "4. Ver HISTORIAL local (ya descargados antes) y volver a analizar/abrir uno",
-        "en": "4. View local HISTORY (previously downloaded) and re-analyze/open one",
-        "pt": "4. Ver HISTÓRICO local (já baixados antes) e reanalisar/abrir um",
-    },
-    "ftp_ops.menu_cancel": {
-        "es": "0. Cancelar",
-        "en": "0. Cancel",
-        "pt": "0. Cancelar",
-    },
-    "ftp_ops.option_prompt_default1": {
-        "es": "Opción [1]: ",
-        "en": "Option [1]: ",
-        "pt": "Opção [1]: ",
+        "es": "Ver HISTORIAL local (ya descargados antes) y volver a analizar/abrir uno",
+        "en": "View local HISTORY (previously downloaded) and re-analyze/open one",
+        "pt": "Ver HISTÓRICO local (já baixados antes) e reanalisar/abrir um",
     },
     "ftp_ops.logs_available_title": {
         "es": "Logs disponibles en la consola:",
@@ -412,16 +469,6 @@ STRINGS = {
         "en": "[+] All folders match in file count.",
         "pt": "[+] Todas as pastas coincidem na quantidade de arquivos.",
     },
-    "ftp_ops.pick_prompt_cancel": {
-        "es": "\nElegí [1-{max}], 0 para cancelar (Enter = el primero): ",
-        "en": "\nPick [1-{max}], 0 to cancel (Enter = the first one): ",
-        "pt": "\nEscolha [1-{max}], 0 para cancelar (Enter = o primeiro): ",
-    },
-    "ftp_ops.pick_prompt_nocancel": {
-        "es": "\nElegí [1-{max}] (Enter = el primero): ",
-        "en": "\nPick [1-{max}] (Enter = the first one): ",
-        "pt": "\nEscolha [1-{max}] (Enter = o primeiro): ",
-    },
 }
 i18n.register(STRINGS)
 
@@ -515,6 +562,98 @@ def _connect(project_cfg, global_cfg):
     if global_cfg:
         disconnect_vpn(global_cfg)
     return connect_ftp(project_cfg)
+
+
+def _connect_with_retry(project_cfg, global_cfg, retries=2, delay=2.0):
+    """!
+    @brief `_connect()`, retrying a couple of times on failure before giving up.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict.
+    @param retries Extra connection attempts after the first one fails.
+    @param delay Seconds to wait between attempts.
+    @return An `ftplib.FTP` instance, or `None` if every attempt failed.
+    @note VitaShell's ftpd occasionally refuses a new connection attempt made
+          right after a previous one closed (still tearing down the old data
+          connection) -- a short, silent retry recovers from that without
+          making the user re-trigger the whole operation by hand.
+    """
+    ftp = _connect(project_cfg, global_cfg)
+    attempt = 0
+    while ftp is None and attempt < retries:
+        attempt += 1
+        print(t("ftp_ops.retry_connect", attempt=attempt, retries=retries))
+        time.sleep(delay)
+        ftp = _connect(project_cfg, global_cfg)
+    return ftp
+
+
+def _keepalive(ftp):
+    """!
+    @brief Send `NOOP` to keep an idle FTP control connection from timing out.
+    @param ftp Connected `ftplib.FTP` instance.
+    @return `True` if the connection is still alive.
+    """
+    try:
+        ftp.voidcmd("NOOP")
+        return True
+    except all_errors:
+        return False
+
+
+def _progress_callback(total_size, label=""):
+    """!
+    @brief Build an `ftplib` `storbinary`/`retrbinary` callback that prints a
+           throttled progress bar (percent, KB/s, ETA) to stdout.
+    @param total_size Expected total transfer size in bytes, or `0`/`None` if
+           unknown (e.g. the server doesn't support `SIZE`) -- falls back to a
+           running total + speed display with no percent/bar/ETA.
+    @param label Short text shown at the end of the progress line (e.g. the filename).
+    @return A callback suitable for `storbinary(..., callback=...)` or passed
+            as `retrbinary`'s write callback (wrap it to also write the block).
+    @note Throttled to at most ~1 redraw per 150ms so it doesn't spend more
+          time printing than transferring on a fast LAN.
+    """
+    state = {"done": 0, "start": time.time(), "last": 0.0}
+
+    def callback(block):
+        state["done"] += len(block)
+        now = time.time()
+        finished = bool(total_size) and state["done"] >= total_size
+        if not finished and now - state["last"] < 0.15:
+            return
+        state["last"] = now
+        elapsed = max(now - state["start"], 0.001)
+        speed_kbps = (state["done"] / 1024) / elapsed
+        if total_size:
+            pct = min(100.0, state["done"] * 100 / total_size)
+            remaining_kb = max(total_size - state["done"], 0) / 1024
+            eta = f"{remaining_kb / speed_kbps:5.1f}s" if speed_kbps > 0 else "--"
+            bar_len = 24
+            filled = int(bar_len * pct / 100)
+            bar = "#" * filled + "-" * (bar_len - filled)
+            line = f"\r  [{bar}] {pct:5.1f}%  {speed_kbps:7.1f} KB/s  ETA {eta}  {label}"
+        else:
+            line = f"\r  {state['done'] / 1024:9.1f} KB  {speed_kbps:7.1f} KB/s  {label}"
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        if finished:
+            sys.stdout.write("\n")
+
+    return callback
+
+
+def _remote_size(ftp, path):
+    """!
+    @brief Best-effort remote file size lookup, for the download progress bar.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param path Remote file path.
+    @return Size in bytes, or `0` if the server doesn't support `SIZE`/it fails.
+    """
+    try:
+        ftp.voidcmd("TYPE I")
+        return ftp.size(path) or 0
+    except all_errors:
+        return 0
 
 
 def create_dir_if_missing(ftp, path):
@@ -619,10 +758,13 @@ def list_local_vpks(project_dir, build_dir="build"):
     return vpks
 
 
-def choose_vpk(project_cfg):
+def choose_vpk(project_cfg, non_interactive=False):
     """!
     @brief Interactive picker for which local VPK to upload.
     @param project_cfg Active project config dict.
+    @param non_interactive If `True`, skip the prompt and return the newest
+           local VPK directly (or `None` if there isn't one) -- used by the
+           headless CLI (`psvita-toolkit deploy`), which has no TTY to prompt on.
     @return The chosen `Path`, or `None` if cancelled, none found, or an invalid choice.
     """
     project_dir = project_cfg["_project_dir"]
@@ -632,39 +774,38 @@ def choose_vpk(project_cfg):
         print(f"{C.RED}{t('ftp_ops.no_vpk_found', build_dir=build_dir)}{C.RESET}")
         return None
 
-    print(t("ftp_ops.vpks_found", count=len(vpks)))
-    for i, p in enumerate(vpks, 1):
+    if non_interactive:
+        return vpks[0]
+
+    def label(p):
         desc = _vpk_desc(p.name)
         size_mb = p.stat().st_size / (1024 * 1024)
         mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime))
-        print(f"  {i:2d}. {p.name:<32}{desc:<26} {size_mb:6.2f} MB   {mtime}")
-    print(f"   {t('ftp_ops.cancel_bracket_option')}")
+        return f"{p.name:<32}{C.DIM}{desc:<26} {size_mb:6.2f} MB   {mtime}{C.RESET}"
 
-    choice = input(t("ftp_ops.choose_vpk_prompt", max=len(vpks))).strip()
-    if not choice:
-        return vpks[0]
-    if choice in ("0", "q"):
-        return None
-    if choice.isdigit() and 1 <= int(choice) <= len(vpks):
-        return vpks[int(choice) - 1]
-    print(f"{C.RED}{t('ftp_ops.invalid_option')}{C.RESET}")
-    return None
+    return tui.select_list(t("ftp_ops.vpks_found", count=len(vpks)), vpks, label_fn=label)
 
 
 # ---------------------------------------------------------------------------
 # Upload: VPK / eboot
 # ---------------------------------------------------------------------------
 
-def upload_vpk(project_cfg, global_cfg):
+def upload_vpk(project_cfg, global_cfg, vpk_path=None, non_interactive=False):
     """!
     @brief Upload the chosen local VPK to the Vita's downloads folder.
     @param project_cfg Active project config dict.
     @param global_cfg Global config dict (VPN bypass, etc).
+    @param vpk_path Explicit `.vpk` path to upload, bypassing the picker
+           entirely -- used by the headless CLI when `--vpk-path` is given.
+    @param non_interactive If `True` (and `vpk_path` isn't given), pick the
+           newest local VPK without prompting -- see `choose_vpk()`.
     """
-    local_vpk = choose_vpk(project_cfg)
-    if not local_vpk:
+    local_vpk = Path(vpk_path) if vpk_path else choose_vpk(project_cfg, non_interactive=non_interactive)
+    if not local_vpk or not Path(local_vpk).exists():
+        if local_vpk:
+            print(f"{C.RED}{t('ftp_ops.vpk_not_found', path=local_vpk)}{C.RESET}")
         return
-    ftp = _connect(project_cfg, global_cfg)
+    ftp = _connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         return
     try:
@@ -672,8 +813,9 @@ def upload_vpk(project_cfg, global_cfg):
         create_dir_if_missing(ftp, downloads_dir)
         dest = f"{downloads_dir}/{local_vpk.name}"
         print(t("ftp_ops.uploading_file", local=local_vpk, dest=dest))
+        total_size = Path(local_vpk).stat().st_size
         with open(local_vpk, "rb") as f:
-            ftp.storbinary(f"STOR {dest}", f)
+            ftp.storbinary(f"STOR {dest}", f, callback=_progress_callback(total_size, label=local_vpk.name))
         dest_display = f"{downloads_dir.replace('/ux0:', 'ux0:')}/{local_vpk.name}"
         print(f"{C.GREEN}{t('ftp_ops.vpk_upload_success', path=dest_display)}{C.RESET}")
     except all_errors as e:
@@ -682,12 +824,15 @@ def upload_vpk(project_cfg, global_cfg):
         _quit(ftp)
 
 
-def upload_eboot(project_cfg, global_cfg):
+def upload_eboot(project_cfg, global_cfg, assume_yes=False):
     """!
     @brief Upload only `eboot.bin` to `ux0:app/<titleid>/`, for a fast iterate cycle.
     @param project_cfg Active project config dict.
     @param global_cfg Global config dict (VPN bypass, etc).
-    @note Requires user confirmation before overwriting the installed eboot.
+    @param assume_yes Skip the overwrite confirmation -- used by the headless
+           CLI (`psvita-toolkit deploy --eboot --yes`), which has no TTY to confirm on.
+    @note Requires user confirmation before overwriting the installed eboot,
+          unless `assume_yes` is set.
     """
     project_dir = Path(project_cfg["_project_dir"])
     eboot = project_dir / project_cfg.get("build_dir", "build") / "eboot.bin"
@@ -700,11 +845,11 @@ def upload_eboot(project_cfg, global_cfg):
     print(t("ftp_ops.eboot_found", size_kb=size_kb, mtime=mtime))
 
     titleid = project_cfg["titleid"]
-    if not tui.confirm(t("ftp_ops.confirm_upload_eboot_only", titleid=titleid)):
+    if not assume_yes and not tui.confirm(t("ftp_ops.confirm_upload_eboot_only", titleid=titleid)):
         print(t("ftp_ops.cancelled"))
         return
 
-    ftp = _connect(project_cfg, global_cfg)
+    ftp = _connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         return
     dest_dir = f"/ux0:/app/{titleid}"
@@ -713,7 +858,7 @@ def upload_eboot(project_cfg, global_cfg):
         dest = f"{dest_dir}/eboot.bin"
         print(t("ftp_ops.uploading_file", local=eboot, dest=dest))
         with open(eboot, "rb") as f:
-            ftp.storbinary(f"STOR {dest}", f)
+            ftp.storbinary(f"STOR {dest}", f, callback=_progress_callback(eboot.stat().st_size, label="eboot.bin"))
         print(f"{C.GREEN}{t('ftp_ops.eboot_upload_success')}{C.RESET}")
     except all_errors as e:
         print(f"{C.RED}{t('ftp_ops.transfer_failed', error=e)}{C.RESET}")
@@ -780,15 +925,20 @@ def list_remote_dumps(ftp, project_cfg):
 
 def _download_remote_file(ftp, remote_dir, remote_name, local_path):
     """!
-    @brief Download a single remote file to a local path.
+    @brief Download a single remote file to a local path, with a progress bar.
     @param ftp Connected `ftplib.FTP` instance.
     @param remote_dir Remote directory containing the file.
     @param remote_name Remote filename.
     @param local_path Local destination path.
     """
     ftp.cwd(remote_dir)
+    total_size = _remote_size(ftp, remote_name)
+    progress = _progress_callback(total_size, label=remote_name)
     with open(local_path, "wb") as f:
-        ftp.retrbinary(f"RETR {remote_name}", f.write)
+        def _write_and_report(block):
+            f.write(block)
+            progress(block)
+        ftp.retrbinary(f"RETR {remote_name}", _write_and_report)
 
 
 def list_local_history(project_cfg, kind="logs"):
@@ -808,54 +958,27 @@ def list_local_history(project_cfg, kind="logs"):
     return files
 
 
-def _pick_from_menu(title, options_with_dates, allow_cancel=True):
-    """!
-    @brief Print a numbered menu and prompt for a choice.
-    @param title Menu title to print.
-    @param options_with_dates list of `(label, date_str)` tuples.
-    @param allow_cancel Whether option `0` cancels the menu.
-    @return The chosen index (`0`-based), or `None` if cancelled/invalid.
-    """
-    print(f"\n{C.BOLD}{title}{C.RESET}")
-    for i, (label, date_str) in enumerate(options_with_dates, 1):
-        print(f"  {i:2d}. {label:<40} {C.DIM}{date_str}{C.RESET}")
-    if allow_cancel:
-        print(f"   {t('ftp_ops.cancel_bracket_option')}")
-    if allow_cancel:
-        prompt = t("ftp_ops.pick_prompt_cancel", max=len(options_with_dates))
-    else:
-        prompt = t("ftp_ops.pick_prompt_nocancel", max=len(options_with_dates))
-    choice = input(prompt).strip()
-    if not choice:
-        return 0
-    if choice in ("0", "q") and allow_cancel:
-        return None
-    if choice.isdigit() and 1 <= int(choice) <= len(options_with_dates):
-        return int(choice) - 1
-    print(f"{C.RED}{t('ftp_ops.invalid_option')}{C.RESET}")
-    return None
-
-
 def download_logs_and_dumps(project_cfg, global_cfg):
     """!
     @brief Menu: download the LATEST log/dump, pick a SPECIFIC one from what's currently on
            the console, or browse the local HISTORY of previously downloaded files.
     @param project_cfg Active project config dict.
     @param global_cfg Global config dict (VPN bypass, etc).
-    @note The local-history mode (option 4) is a deliberate third mode, not just a
+    @note The local-history mode is a deliberate third mode, not just a
           convenience shortcut -- see docs/dev-notes/ftp_ops.md.
     """
-    print(f"{C.BOLD}{t('ftp_ops.what_to_do')}{C.RESET}")
-    print(f"  {t('ftp_ops.menu_download_latest')}")
-    print(f"  {t('ftp_ops.menu_pick_log')}")
-    print(f"  {t('ftp_ops.menu_pick_dump')}")
-    print(f"  {t('ftp_ops.menu_local_history')}")
-    print(f"  {t('ftp_ops.menu_cancel')}")
-    choice = input(t("ftp_ops.option_prompt_default1")).strip() or "1"
-
-    if choice == "0":
+    actions = [
+        ("latest", t("ftp_ops.menu_download_latest")),
+        ("pick_log", t("ftp_ops.menu_pick_log")),
+        ("pick_dump", t("ftp_ops.menu_pick_dump")),
+        ("history", t("ftp_ops.menu_local_history")),
+    ]
+    chosen = tui.select_list(t("ftp_ops.what_to_do"), actions, label_fn=lambda a: a[1])
+    if chosen is None:
         return
-    if choice == "4":
+    action, _ = chosen
+
+    if action == "history":
         _browse_local_history(project_cfg)
         return
 
@@ -863,31 +986,35 @@ def download_logs_and_dumps(project_cfg, global_cfg):
     if not ftp:
         return
     try:
-        if choice == "1":
+        if action == "latest":
             _download_latest(ftp, project_cfg, want_dump=True, want_log=True)
-        elif choice == "2":
+        elif action == "pick_log":
             logs = list_remote_logs(ftp, project_cfg)
             if not logs:
                 print(f"{C.YELLOW}{t('ftp_ops.no_logs_found', dir=project_cfg.get('vita_logs_dir'))}{C.RESET}")
                 return
-            idx = _pick_from_menu(t("ftp_ops.logs_available_title"),
-                                  [(name, mtime or "") for name, mtime in logs])
-            if idx is None:
+            picked = tui.select_list(
+                t("ftp_ops.logs_available_title"), logs,
+                label_fn=lambda e: f"{e[0]:<40} {C.DIM}{e[1] or ''}{C.RESET}",
+            )
+            if picked is None:
                 return
-            name, _ = logs[idx]
+            name, _ = picked
             local_path = _local_logs_dir(project_cfg) / name
             _download_remote_file(ftp, project_cfg.get("vita_logs_dir"), name, local_path)
             print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
-        elif choice == "3":
+        elif action == "pick_dump":
             dumps = list_remote_dumps(ftp, project_cfg)
             if not dumps:
                 print(f"{C.YELLOW}{t('ftp_ops.no_dumps_found', dir=project_cfg.get('vita_data_dir'))}{C.RESET}")
                 return
-            idx = _pick_from_menu(t("ftp_ops.dumps_available_title"),
-                                  [(name, mtime or "") for name, mtime in dumps])
-            if idx is None:
+            picked = tui.select_list(
+                t("ftp_ops.dumps_available_title"), dumps,
+                label_fn=lambda e: f"{e[0]:<40} {C.DIM}{e[1] or ''}{C.RESET}",
+            )
+            if picked is None:
                 return
-            name, _ = dumps[idx]
+            name, _ = picked
             local_path = _local_logs_dir(project_cfg) / f"{project_cfg['slug']}-{name}"
             _download_remote_file(ftp, project_cfg.get("vita_data_dir"), name, local_path)
             print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
@@ -960,12 +1087,15 @@ def _browse_local_history(project_cfg):
         options.append(("dump", p))
     options.sort(key=lambda t: t[1].stat().st_mtime, reverse=True)
 
-    labeled = [(f"[{kind}] {p.name}", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime)))
-               for kind, p in options]
-    idx = _pick_from_menu(t("ftp_ops.local_history_title"), labeled)
-    if idx is None:
+    def label(entry):
+        kind, p = entry
+        mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime))
+        return f"[{kind}] {p.name:<36} {C.DIM}{mtime}{C.RESET}"
+
+    chosen = tui.select_list(t("ftp_ops.local_history_title"), options, label_fn=label)
+    if chosen is None:
         return
-    kind, path = options[idx]
+    kind, path = chosen
     if kind == "dump":
         _offer_analyze(project_cfg, path)
     else:
@@ -1123,27 +1253,41 @@ def verify_data_assets(project_cfg, global_cfg, local_reference_dir):
     vita_game_dir = project_cfg.get("vita_game_data_dir")
     print(t("ftp_ops.comparing_subfolders", count=len(subfolders), dir=vita_game_dir))
 
+    # One persistent connection for the whole comparison, instead of
+    # reconnecting per subfolder (VitaShell's ftpd only tolerates so many
+    # connect/disconnect cycles back to back -- see docs/dev-notes/ftp_ops.md).
+    # A NOOP keep-alive between subfolders, and a single reconnect-and-retry
+    # if the connection actually drops mid-loop, cover both failure modes
+    # without paying a fresh handshake for every subfolder.
+    ftp = _connect_with_retry(project_cfg, global_cfg)
+    if not ftp:
+        print(f"  {t('ftp_ops.subfolder_connect_failed', sub=subfolders[0])}")
+        return
+
     any_mismatch = False
-    for sub in subfolders:
-        local_count = sum(1 for p in (local_dir / sub).iterdir()
-                           if not p.name.startswith("._") and p.name != ".DS_Store")
-        ftp = _connect(project_cfg, global_cfg)
-        if not ftp:
-            print(f"  {t('ftp_ops.subfolder_connect_failed', sub=sub)}")
-            any_mismatch = True
-            continue
-        try:
-            entries = _list_entries(ftp, f"{vita_game_dir}/{sub}")
-            remote_count = sum(1 for name, _, _ in entries
-                                if not name.startswith("._") and name != ".DS_Store")
-            status = "OK" if local_count == remote_count else "MISMATCH"
-            if status == "MISMATCH":
+    try:
+        for sub in subfolders:
+            local_count = sum(1 for p in (local_dir / sub).iterdir()
+                               if not p.name.startswith("._") and p.name != ".DS_Store")
+            if not _keepalive(ftp):
+                ftp = _connect_with_retry(project_cfg, global_cfg)
+                if not ftp:
+                    print(f"  {t('ftp_ops.subfolder_connect_failed', sub=sub)}")
+                    any_mismatch = True
+                    continue
+            try:
+                entries = _list_entries(ftp, f"{vita_game_dir}/{sub}")
+                remote_count = sum(1 for name, _, _ in entries
+                                    if not name.startswith("._") and name != ".DS_Store")
+                status = "OK" if local_count == remote_count else "MISMATCH"
+                if status == "MISMATCH":
+                    any_mismatch = True
+                print(f"  [{status}] {sub}/: local={local_count}  vita={remote_count}")
+            except all_errors as e:
+                print(f"  {t('ftp_ops.subfolder_list_failed', sub=sub, error=e)}")
                 any_mismatch = True
-            print(f"  [{status}] {sub}/: local={local_count}  vita={remote_count}")
-        except all_errors as e:
-            print(f"  {t('ftp_ops.subfolder_list_failed', sub=sub, error=e)}")
-            any_mismatch = True
-        finally:
+    finally:
+        if ftp:
             _quit(ftp)
 
     print()
@@ -1151,3 +1295,124 @@ def verify_data_assets(project_cfg, global_cfg, local_reference_dir):
         print(f"{C.YELLOW}{t('ftp_ops.folders_mismatch_warning')}{C.RESET}")
     else:
         print(f"{C.GREEN}{t('ftp_ops.all_folders_match')}{C.RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Console profiles (multiple named PS Vita units: OLED / Slim / PSTV / ...)
+# ---------------------------------------------------------------------------
+
+def list_console_profiles(project_cfg):
+    """!
+    @brief Get every saved console profile for this project.
+    @param project_cfg Active project config dict.
+    @return dict of `{name: {"ip": ..., "port": ...}}`, `{}` if none saved yet.
+    """
+    return project_cfg.get("consoles", {})
+
+
+def save_console_profile(project_cfg, name, ip, port):
+    """!
+    @brief Save (or overwrite) a named console profile and persist it.
+    @param project_cfg Active project config dict (mutated in place).
+    @param name Profile name (e.g. `"OLED"`, `"Slim"`, `"PSTV"`).
+    @param ip Console's IP address.
+    @param port Console's FTP port.
+    """
+    profiles = project_cfg.setdefault("consoles", {})
+    profiles[name] = {"ip": ip, "port": port}
+    cfgmod.save_project_config(project_cfg["_project_dir"], project_cfg)
+
+
+def delete_console_profile(project_cfg, name):
+    """!
+    @brief Delete a saved console profile.
+    @param project_cfg Active project config dict (mutated in place).
+    @param name Profile name to delete.
+    @return `True` if it existed and was deleted.
+    """
+    profiles = project_cfg.get("consoles", {})
+    if name not in profiles:
+        return False
+    del profiles[name]
+    cfgmod.save_project_config(project_cfg["_project_dir"], project_cfg)
+    return True
+
+
+def switch_console_profile(project_cfg, name):
+    """!
+    @brief Make a saved console profile the active one (`vita_ip`/`vita_port`).
+    @param project_cfg Active project config dict (mutated in place).
+    @param name Profile name to switch to.
+    @return `True` if the profile existed and was switched to.
+    @note Every FTP call site already reads `project_cfg["vita_ip"]`/`["vita_port"]`
+          directly -- switching the active profile just overwrites those two
+          keys, no other call site needs to know profiles exist at all.
+    """
+    profiles = project_cfg.get("consoles", {})
+    if name not in profiles:
+        return False
+    project_cfg["vita_ip"] = profiles[name]["ip"]
+    project_cfg["vita_port"] = profiles[name]["port"]
+    cfgmod.save_project_config(project_cfg["_project_dir"], project_cfg)
+    return True
+
+
+def console_profiles_menu(project_cfg):
+    """!
+    @brief TUI submenu: list/add/switch/delete named console profiles.
+    @param project_cfg Active project config dict.
+    """
+    def header():
+        active_ip = project_cfg.get("vita_ip")
+        active_port = project_cfg.get("vita_port")
+        print(f"{C.BOLD}{t('ftp_ops.console_active', ip=active_ip, port=active_port)}{C.RESET}\n")
+        profiles = list_console_profiles(project_cfg)
+        if not profiles:
+            print(t("ftp_ops.console_none_saved"))
+            return
+        for name, info in profiles.items():
+            marker = f"{C.GREEN}★{C.RESET}" if (info.get("ip"), info.get("port")) == (active_ip, active_port) else " "
+            print(f"  {marker} {name:<14} {info.get('ip')}:{info.get('port')}")
+
+    def do_add():
+        name = input(t("ftp_ops.console_name_prompt")).strip()
+        if not name:
+            return
+        ip = input(t("ftp_ops.console_ip_prompt", default=project_cfg.get("vita_ip", "192.168.1.100"))).strip() \
+            or project_cfg.get("vita_ip", "192.168.1.100")
+        port_raw = input(t("ftp_ops.console_port_prompt", default=project_cfg.get("vita_port", 1337))).strip()
+        port = int(port_raw) if port_raw.isdigit() else project_cfg.get("vita_port", 1337)
+        save_console_profile(project_cfg, name, ip, port)
+        print(f"{C.GREEN}{t('ftp_ops.console_saved', name=name)}{C.RESET}")
+
+    def _pick_profile_name():
+        profiles = list_console_profiles(project_cfg)
+        if not profiles:
+            print(t("ftp_ops.console_none_saved"))
+            return None
+        names = list(profiles)
+        return tui.select_list(
+            t("ftp_ops.console_choose_title"), names,
+            label_fn=lambda n: f"{n}  {C.DIM}({profiles[n].get('ip')}:{profiles[n].get('port')}){C.RESET}",
+        )
+
+    def do_switch():
+        name = _pick_profile_name()
+        if name and switch_console_profile(project_cfg, name):
+            print(f"{C.GREEN}{t('ftp_ops.console_switched', name=name)}{C.RESET}")
+
+    def do_delete():
+        name = _pick_profile_name()
+        if name and delete_console_profile(project_cfg, name):
+            print(f"{C.GREEN}{t('ftp_ops.console_deleted', name=name)}{C.RESET}")
+
+    items = [
+        (t("ftp_ops.console_add"), do_add),
+        (t("ftp_ops.console_switch"), do_switch),
+        (t("ftp_ops.console_delete"), do_delete),
+    ]
+    tui.run_menu(
+        t("ftp_ops.console_menu_title"), items,
+        breadcrumb=t("ftp_ops.console_breadcrumb", game_name=project_cfg["game_name"]),
+        header_extra=header,
+    )

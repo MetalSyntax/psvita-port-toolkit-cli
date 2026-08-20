@@ -17,17 +17,26 @@ fill in every field by hand for a port that already has most of that information
 `cfgmod.autodetect_legacy_fields()` first and pre-fills every prompt with its best guess —
 Enter accepts the detected value, so adopting a well-behaved legacy port is nearly a formality.
 
-## Why `select_or_create_project()`'s main loop uses a `result_holder` closure
+## Why `select_or_create_project()`'s main loop raises `tui.MenuResult`
 
-The main entry menu is built from `tui.run_menu()`-style items, but unlike a typical menu
-callback (which just performs an action and returns nothing useful), several of these callbacks
-need to return an actual value — the opened project's config dict — back out to the caller.
-Since a menu callback's return value is normally discarded, `result_holder` is a one-item dict
-captured by each callback's closure purely as an out-of-band way to smuggle that return value
-back to the loop driving the menu, which then checks `result_holder.get("value")` after the
-callback runs and returns it if set. It's a small trick, but a deliberate one — don't replace it
-with a return-value-based design without also reworking how `run_menu()`'s generic item
-callbacks are invoked.
+The main entry menu is built from plain `tui.run_menu()` items, but unlike a typical menu
+callback (which just performs an action and returns nothing useful), "continue with the last
+port"/"continue with another port"/"create a new port" need to hand an actual value — the opened
+project's config dict — straight back to `select_or_create_project()`'s caller, and to do it
+immediately, without the usual `pause()` ("Press ENTER to continue...") `run_menu()` shows after
+every other action. `tui.MenuResult(value)` exists exactly for this: raising it from a callback
+makes `run_menu()` return `value` right away instead of pausing and redrawing. The other two
+items ("global settings", "doctor") are ordinary callbacks with no early return, so `run_menu()`
+just redraws this same menu after them — which is also why the function no longer needs its own
+outer `while True`: that redraw-after-a-plain-action behavior is `run_menu()`'s job now, not
+this screen's.
+
+## Why `main()` catches `tui.GoToMainMenu` around this screen
+
+This screen sits at the root: pressing `M` or Ctrl+C from here has nowhere shallower to jump to,
+so `tui.GoToMainMenu` would otherwise escape `select_or_create_project()` uncaught. `__main__.main()`
+catches it right there and just loops back to redraw the project selector — consistent with
+every other menu treating `GoToMainMenu` as "go back to my own root", since this screen IS the root.
 
 ## `_edit_global_config()`'s language-change step
 

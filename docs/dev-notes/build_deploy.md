@@ -105,6 +105,38 @@ deleted a legacy project's `build.sh` on the assumption that this toolkit's gene
 fully replaces it -- which is the right assumption, but meant the fallback had to actually be a
 complete replacement, not just the `cmake`/`make` calls alone.
 
+## Why the `build.sh`-less fallback picks Ninja over `make` when available, but doesn't try to reuse its cache
+
+`_choose_generator()` prefers `Ninja` (parallel by default, generally faster incremental
+rebuilds) over `Unix Makefiles`, and the build step now runs `cmake --build <dir> --parallel N`
+instead of a hardcoded `make -jN` -- generator-agnostic, so it works the same regardless of which
+one got picked. This was a pure speed win with no correctness trade-off, unlike the tempting
+next step: making `_stage_in_tmp()` reuse the *same* `/tmp` directory across builds instead of a
+fresh `tempfile.mkdtemp()` every time, so Ninja/CMake's cache could actually carry over. That
+was deliberately **not** done -- it directly undoes the fix documented above (space-in-path bug,
+gitignore-aware staging), and "clean, always-correct, a bit slower" was an explicit trade-off,
+not an oversight to "fix" here.
+
+## Why "clean build" wipes `build_dir`, not `CMakeCache.txt` specifically
+
+The plan item this responds to (`docs/dev-notes/../PLAN_PSVITA_PORT_TOOLKIT_V2.md` #4) asked for
+"clean build / rebuild from scratch / delete CMakeCache.txt" as if they were three different
+knobs. In this codebase they collapse to one: the `build.sh`-less fallback always reconfigures
+from scratch anyway (see above), so there's no stale cache to selectively delete there in the
+first place. The only place staleness can actually accumulate is a `build.sh`-based project's own
+persistent `build_dir` (e.g. switching presets without ever clearing it). `_run_build(...,
+clean=True)` just `shutil.rmtree()`s that directory before either build path runs -- simpler than
+trying to selectively delete `CMakeCache.txt`/`CMakeFiles/` and equally effective, since
+`build.sh` is expected to regenerate `build_dir` itself (standard CMake project layout).
+
+## Why `compile_commands.json` only exists for the `build.sh`-less fallback path
+
+`-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` and the copy-back to the project root only happen in
+`_run_cmake_direct()`. A `build.sh`-based project could add the same flag itself if its own
+script passes extra `cmake` arguments through, but this toolkit has no visibility into (or
+control over) what an opaque `build.sh` actually runs -- adding it unconditionally to that path
+would mean guessing at a script this toolkit doesn't own.
+
 ## Why `UNIVERSAL_PRESETS` stores i18n keys, not resolved text
 
 `UNIVERSAL_PRESETS` is a module-level list, built once at import time — which happens before

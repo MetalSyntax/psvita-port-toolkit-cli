@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
 
 # Generated API reference (regenerate with dev-tools/gen_docs.py --api-only) --
 # docs/dev-notes/ is hand-written and committed, docs/api/ is a build artifact.
@@ -21,3 +22,7 @@ venv/
 .vscode/
 .idea/
 *.swp
+
+# Local planning scratch docs (not part of the shipped toolkit) --
+# docs/dev-notes/*.md and README.md stay tracked, see the comment above.
+/PLAN_PSVITA_PORT_TOOLKIT_V*.md

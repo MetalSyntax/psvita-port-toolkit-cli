@@ -26,6 +26,7 @@ from pathlib import Path
 
 from . import i18n
 from .i18n import t
+from . import tui
 from .tui import C
 
 # UNIVERSAL_PRESETS' descriptors are stored as i18n KEYS (not resolved text)
@@ -75,16 +76,6 @@ STRINGS = {
         "en": "Build Only        (Generate binaries without deploying)",
         "pt": "Somente Compilar  (Gerar binários sem implantar)",
     },
-    "build_deploy.cancel": {
-        "es": "Cancelar",
-        "en": "Cancel",
-        "pt": "Cancelar",
-    },
-    "build_deploy.target_prompt": {
-        "es": "Destino [1]: ",
-        "en": "Target [1]: ",
-        "pt": "Destino [1]: ",
-    },
     "build_deploy.choose_preset_title": {
         "es": "[2/3] Configuración de compilación:",
         "en": "[2/3] Build configuration:",
@@ -99,11 +90,6 @@ STRINGS = {
         "es": "Personalizado (flags de CMake a mano)",
         "en": "Custom (manual CMake flags)",
         "pt": "Personalizado (flags de CMake manuais)",
-    },
-    "build_deploy.option_prompt": {
-        "es": "Opción [1]: ",
-        "en": "Option [1]: ",
-        "pt": "Opção [1]: ",
     },
     "build_deploy.downsample_ratio_prompt": {
         "es": "Ratio de downsample DS_NUM/DS_DEN [2/3]: ",
@@ -186,9 +172,9 @@ STRINGS = {
         "pt": "[*] Cancelado.",
     },
     "build_deploy.building_header": {
-        "es": "🔨 Compilando {game_name}  (preset: {preset}, destino: {target})",
-        "en": "🔨 Building {game_name}  (preset: {preset}, target: {target})",
-        "pt": "🔨 Compilando {game_name}  (preset: {preset}, destino: {target})",
+        "es": "Compilando {game_name} (preset: {preset}, destino: {target})",
+        "en": "Building {game_name} (preset: {preset}, target: {target})",
+        "pt": "Compilando {game_name} (preset: {preset}, destino: {target})",
     },
     "build_deploy.build_failed": {
         "es": "[-] El build falló -- revisar el output de arriba.",
@@ -209,6 +195,31 @@ STRINGS = {
         "es": "Tip: para desplegar más tarde usá las opciones del menú principal 'Subir a PS Vita'.",
         "en": "Tip: to deploy later, use the main menu options 'Upload to PS Vita'.",
         "pt": "Dica: para implantar depois, use as opções do menu principal 'Enviar para o PS Vita'.",
+    },
+    "build_deploy.clean_build_prompt": {
+        "es": "¿Build limpio? (borra {build_dir} antes de compilar)",
+        "en": "Clean build? (deletes {build_dir} before building)",
+        "pt": "Build limpo? (apaga {build_dir} antes de compilar)",
+    },
+    "build_deploy.clean_build_removed": {
+        "es": "[*] {build_dir} eliminado -- compilando desde cero.",
+        "en": "[*] {build_dir} removed -- building from scratch.",
+        "pt": "[*] {build_dir} removido -- compilando do zero.",
+    },
+    "build_deploy.generator_ninja": {
+        "es": "[*] Generador: Ninja (builds en paralelo más rápidos)",
+        "en": "[*] Generator: Ninja (faster parallel builds)",
+        "pt": "[*] Gerador: Ninja (builds paralelos mais rápidos)",
+    },
+    "build_deploy.generator_make": {
+        "es": "[*] Generador: Unix Makefiles (instalá 'ninja' para builds más rápidos)",
+        "en": "[*] Generator: Unix Makefiles (install 'ninja' for faster builds)",
+        "pt": "[*] Gerador: Unix Makefiles (instale o 'ninja' para builds mais rápidos)",
+    },
+    "build_deploy.compile_commands_copied": {
+        "es": "[+] compile_commands.json copiado a la raíz del proyecto (para clangd/IDEs).",
+        "en": "[+] compile_commands.json copied to the project root (for clangd/IDEs).",
+        "pt": "[+] compile_commands.json copiado para a raiz do projeto (para clangd/IDEs).",
     },
 }
 i18n.register(STRINGS)
@@ -267,12 +278,9 @@ def _choose_target():
           make it unusable for this class of port -- see
           `docs/dev-notes/build_deploy.md`.
     """
-    print(f"{C.BOLD}{t('build_deploy.choose_target_title')}{C.RESET}")
-    print(f"  {C.GREEN}1){C.RESET} {t('build_deploy.target_psvita')}")
-    print(f"  {C.GREEN}2){C.RESET} {t('build_deploy.target_local')}")
-    print(f"  {C.RED}q){C.RESET} {t('build_deploy.cancel')}")
-    choice = input(t("build_deploy.target_prompt")).strip() or "1"
-    return {"1": "psvita", "2": "local"}.get(choice)
+    targets = [("psvita", t("build_deploy.target_psvita")), ("local", t("build_deploy.target_local"))]
+    chosen = tui.select_list(t("build_deploy.choose_target_title"), targets, label_fn=lambda tgt: tgt[1])
+    return chosen[0] if chosen else None
 
 
 def _choose_preset(build_sh_path):
@@ -285,37 +293,33 @@ def _choose_preset(build_sh_path):
     """
     extra_flags = _discover_extra_flags(build_sh_path)
 
-    print(f"\n{C.BOLD}{t('build_deploy.choose_preset_title')}{C.RESET}")
     # Resolve UNIVERSAL_PRESETS' i18n keys now, since the active language is
     # already set by this point (see the note next to UNIVERSAL_PRESETS above).
     options = [(label, value, t(desc_key)) for label, value, desc_key in UNIVERSAL_PRESETS]
     for flag in extra_flags:
         desc = _flag_comment(build_sh_path, flag) or t("build_deploy.flag_no_desc")
         options.append((flag, flag, desc))
+    options.append((t("build_deploy.preset_custom"), "__custom__", ""))
 
-    for i, (label, _value, desc) in enumerate(options, 1):
-        print(f"  {C.GREEN}{i}){C.RESET} {C.BOLD}{label:<18}{C.RESET} {desc}")
-    print(f"  {C.GREEN}{len(options) + 1}){C.RESET} {t('build_deploy.preset_custom')}")
-    print(f"  {C.RED}q){C.RESET} {t('build_deploy.cancel')}")
+    def label(opt):
+        label_text, _value, desc = opt
+        return f"{C.BOLD}{label_text:<18}{C.RESET} {C.DIM}{desc}{C.RESET}" if desc else f"{C.BOLD}{label_text}{C.RESET}"
 
-    choice = input(t("build_deploy.option_prompt")).strip() or "1"
-    if choice.lower() in ("q",):
+    chosen = tui.select_list(t("build_deploy.choose_preset_title"), options, label_fn=label)
+    if chosen is None:
         return None, None
-    if not choice.isdigit():
-        return None, None
-    idx = int(choice)
-    if 1 <= idx <= len(options):
-        label, value, _ = options[idx - 1]
-        extra_cmake_flags = []
-        if value == "--downsample-test":
-            ratio = input(t("build_deploy.downsample_ratio_prompt")).strip() or "2/3"
-            num, den = ratio.split("/")
-            extra_cmake_flags = [num, den]
-        return value, extra_cmake_flags
-    if idx == len(options) + 1:
+    _label_text, value, _desc = chosen
+
+    if value == "__custom__":
         custom = input(t("build_deploy.custom_flags_prompt")).strip()
         return "custom", custom.split()
-    return None, None
+
+    extra_cmake_flags = []
+    if value == "--downsample-test":
+        ratio = input(t("build_deploy.downsample_ratio_prompt")).strip() or "2/3"
+        num, den = ratio.split("/")
+        extra_cmake_flags = [num, den]
+    return value, extra_cmake_flags
 
 
 _CMAKE_BUILD_TYPES = {
@@ -348,18 +352,24 @@ def _discover_cmake_options(project_dir):
     return [(name, desc, default == "ON") for name, desc, default in _CMAKE_OPTION_RE.findall(text)]
 
 
-def _prompt_cmake_options(project_dir):
+def _prompt_cmake_options(project_dir, non_interactive=False):
     """!
     @brief Interactively let the user toggle each CMake option discovered by
            `_discover_cmake_options()`, one at a time (Enter keeps the
            CMakeLists.txt-declared default).
     @param project_dir Path to the project directory.
+    @param non_interactive If `True`, skip the prompts and keep every
+           discovered option at its `CMakeLists.txt`-declared default --
+           used by the headless CLI (`psvita-toolkit build`), which has no
+           TTY to prompt on.
     @return List of `-D<NAME>=ON`/`-D<NAME>=OFF` strings, one per discovered
             option, ready to append to a `cmake` invocation.
     """
     options = _discover_cmake_options(project_dir)
     if not options:
         return []
+    if non_interactive:
+        return [f"-D{name}={'ON' if default else 'OFF'}" for name, _desc, default in options]
     print(f"\n{C.BOLD}{t('build_deploy.cmake_options_title')}{C.RESET}")
     flags = []
     for name, desc, default in options:
@@ -474,11 +484,29 @@ def _copy_build_outputs(tmp_build, build_path):
     return copied
 
 
-def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
+def _choose_generator(non_interactive=False):
+    """!
+    @brief Pick the CMake generator for the `build.sh`-less fallback path:
+           `Ninja` if it's installed (faster, parallel by default), otherwise
+           the portable `Unix Makefiles`.
+    @param non_interactive Unused (kept for symmetry with the other
+           `non_interactive`-aware helpers) -- this choice never prompts,
+           it's a straight capability check.
+    @return CMake generator name string.
+    """
+    if shutil.which("ninja"):
+        print(t("build_deploy.generator_ninja"))
+        return "Ninja"
+    print(t("build_deploy.generator_make"))
+    return "Unix Makefiles"
+
+
+def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg, non_interactive=False):
     """!
     @brief Fallback build path for projects with no `build.sh`: stage the
-           source under `/tmp`, run `cmake` then `make` there, and copy the
-           resulting `.vpk`/`eboot.bin`/ELF back into the real `build_dir`.
+           source under `/tmp`, configure+build with CMake there (Ninja if
+           available, else Unix Makefiles), and copy the resulting
+           `.vpk`/`eboot.bin`/ELF/`compile_commands.json` back to the project.
     @param project_dir Path to the project directory.
     @param build_dir Build output directory, relative to `project_dir`.
     @param preset Preset value; mapped to `-DCMAKE_BUILD_TYPE=...` unless
@@ -486,7 +514,8 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
     @param extra_args Extra arguments appended to the `cmake` invocation.
     @param global_cfg Global config dict, used to set up the VITASDK
            toolchain's environment (see `_vitasdk_env()`).
-    @return `True` if both `cmake` and `make` exited with code 0.
+    @param non_interactive Passed through to `_prompt_cmake_options()`.
+    @return `True` if both the configure and build steps exited with code 0.
     @note Legacy ports adopted from before this toolkit (created by hand with
           `cmake`/`make` directly, never from `soloader-boilerplate`) have no
           `build.sh` at all -- see `docs/dev-notes/build_deploy.md`. Every
@@ -498,11 +527,17 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
     print(f"{C.YELLOW}{t('build_deploy.no_build_sh_fallback', build_dir=build_path)}{C.RESET}")
 
     env = _vitasdk_env(global_cfg)
-    extra_cmake_opts = _prompt_cmake_options(project_dir)
+    extra_cmake_opts = _prompt_cmake_options(project_dir, non_interactive=non_interactive)
+    generator = _choose_generator(non_interactive=non_interactive)
 
     tmp_root, tmp_src, tmp_build = _stage_in_tmp(project_dir, build_dir)
     try:
-        cmake_args = ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5", str(tmp_src)]
+        cmake_args = [
+            "cmake", "-G", generator,
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            str(tmp_src),
+        ]
         if preset and preset != "custom":
             cmake_args.append(f"-DCMAKE_BUILD_TYPE={_CMAKE_BUILD_TYPES.get(preset, 'Release')}")
         cmake_args.extend(extra_args or [])
@@ -514,20 +549,26 @@ def _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg):
             return False
 
         jobs = subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True, text=True).stdout.strip() or "4"
-        make_args = ["make", f"-j{jobs}"]
-        print(f"\n{t('build_deploy.running_command', cmd=' '.join(make_args))}\n")
-        r = subprocess.run(make_args, cwd=tmp_build, env=env)
+        build_args = ["cmake", "--build", str(tmp_build), "--parallel", jobs]
+        print(f"\n{t('build_deploy.running_command', cmd=' '.join(build_args))}\n")
+        r = subprocess.run(build_args, cwd=tmp_build, env=env)
         if r.returncode != 0:
             return False
 
         if _copy_build_outputs(tmp_build, build_path):
             print(f"{C.GREEN}{t('build_deploy.outputs_copied', build_dir=build_path)}{C.RESET}")
+
+        compile_commands = tmp_build / "compile_commands.json"
+        if compile_commands.exists():
+            shutil.copy2(compile_commands, project_dir / "compile_commands.json")
+            print(f"{C.GREEN}{t('build_deploy.compile_commands_copied')}{C.RESET}")
         return True
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 
 
-def _run_build(project_dir, preset, extra_args, build_dir="build", global_cfg=None):
+def _run_build(project_dir, preset, extra_args, build_dir="build", global_cfg=None,
+               non_interactive=False, clean=False):
     """!
     @brief Run the project's `build.sh` with the chosen preset and extra args,
            falling back to a direct `cmake`+`make` invocation if the project
@@ -540,11 +581,27 @@ def _run_build(project_dir, preset, extra_args, build_dir="build", global_cfg=No
            only used by the `build.sh`-less fallback path.
     @param global_cfg Global config dict -- only used by the `build.sh`-less
            fallback path, to set up the VITASDK toolchain's environment.
+    @param non_interactive If `True`, never prompt (the `build.sh`-less
+           fallback path keeps every discovered CMake option at its
+           declared default instead of asking) -- used by the headless CLI.
+    @param clean If `True`, delete `<project_dir>/<build_dir>` before
+           building -- e.g. to recover from a stale `CMakeCache.txt` left
+           behind by a build.sh that reuses it across presets. Safe for both
+           paths: `build.sh` is expected to regenerate `build_dir` itself
+           (standard CMake project layout), and the `build.sh`-less fallback
+           always reconfigures from scratch in `/tmp` regardless -- this only
+           clears what would otherwise be stale local output.
     @return `True` if the build exited with code 0.
     """
+    if clean:
+        build_path = project_dir / build_dir
+        if build_path.exists():
+            shutil.rmtree(build_path, ignore_errors=True)
+            print(t("build_deploy.clean_build_removed", build_dir=build_path))
+
     build_sh = project_dir / "build.sh"
     if not build_sh.exists():
-        return _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg)
+        return _run_cmake_direct(project_dir, build_dir, preset, extra_args, global_cfg, non_interactive=non_interactive)
     if not os.access(build_sh, os.X_OK):
         print(f"{C.RED}{t('build_deploy.build_sh_not_found', build_sh=build_sh)}{C.RESET}")
         return False
@@ -594,14 +651,16 @@ def _deploy_psvita(project_cfg, global_cfg, vpk_path):
     @param vpk_path Path to the built `.vpk`, or `None` if not found.
     """
     from . import ftp_ops
-    print(f"\n{C.BOLD}{t('build_deploy.deploy_psvita_title')}{C.RESET}")
-    print(f"  {C.GREEN}1){C.RESET} {t('build_deploy.deploy_psvita_opt1')}")
-    print(f"  {C.GREEN}2){C.RESET} {t('build_deploy.deploy_psvita_opt2')}")
-    print(f"  {C.GREEN}3){C.RESET} {t('build_deploy.deploy_psvita_opt3')}")
-    choice = input(t("build_deploy.option_prompt")).strip() or "1"
-    if choice == "1":
+    options = [
+        ("eboot", t("build_deploy.deploy_psvita_opt1")),
+        ("vpk", t("build_deploy.deploy_psvita_opt2")),
+        ("skip", t("build_deploy.deploy_psvita_opt3")),
+    ]
+    chosen = tui.select_list(t("build_deploy.deploy_psvita_title"), options, label_fn=lambda o: o[1])
+    action = chosen[0] if chosen else "skip"
+    if action == "eboot":
         ftp_ops.upload_eboot(project_cfg, global_cfg)
-    elif choice == "2":
+    elif action == "vpk":
         ftp_ops.upload_vpk(project_cfg, global_cfg)
     else:
         print(t("build_deploy.psvita_upload_skipped"))
@@ -627,11 +686,14 @@ def build_and_deploy_wizard(project_cfg, global_cfg):
         print(t("build_deploy.cancelled"))
         return
 
+    build_dir = project_cfg.get("build_dir", "build")
+    clean = tui.confirm(t("build_deploy.clean_build_prompt", build_dir=build_dir), default=False)
+
     print(f"\n{C.CYAN}{C.BOLD}================================================================{C.RESET}")
     print(f"  {t('build_deploy.building_header', game_name=project_cfg['game_name'], preset=preset, target=target)}")
     print(f"{C.CYAN}{C.BOLD}================================================================{C.RESET}\n")
 
-    ok = _run_build(project_dir, preset, extra_args, project_cfg.get("build_dir", "build"), global_cfg)
+    ok = _run_build(project_dir, preset, extra_args, build_dir, global_cfg, clean=clean)
     if not ok:
         print(f"{C.RED}{t('build_deploy.build_failed')}{C.RESET}")
         return

@@ -30,9 +30,9 @@ DEFAULT_VITA_PORT = 1337
 
 STRINGS = {
     "config.first_run_title": {
-        "es": "🛠️  Primera vez -- configuración inicial del toolkit",
-        "en": "🛠️  First run -- initial toolkit setup",
-        "pt": "🛠️  Primeira vez -- configuração inicial da ferramenta",
+        "es": "Primera vez -- configuración inicial del toolkit",
+        "en": "First run -- initial toolkit setup",
+        "pt": "Primeira vez -- configuração inicial da ferramenta",
     },
     "config.first_run_saved_at": {
         "es": "Esto se pregunta una sola vez y se guarda en {path}",

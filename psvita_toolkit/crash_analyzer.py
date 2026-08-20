@@ -18,10 +18,12 @@ memory-base auto-detection strategy.
 
 import glob
 import os
+import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
 
+from . import tui
 from .tui import C
 from . import i18n
 from .i18n import t
@@ -202,6 +204,71 @@ STRINGS = {
         "en": "[+] Report saved to: {path}",
         "pt": "[+] Relatório salvo em: {path}",
     },
+    "crash_analyzer.triage_title": {
+        "es": "Resumen de triaje del crash",
+        "en": "Crash triage summary",
+        "pt": "Resumo de triagem do crash",
+    },
+    "crash_analyzer.triage_dump_line": {
+        "es": "Dump: `{path}`",
+        "en": "Dump: `{path}`",
+        "pt": "Dump: `{path}`",
+    },
+    "crash_analyzer.triage_section_instruction": {
+        "es": "Instrucción que crasheó",
+        "en": "Crashing instruction",
+        "pt": "Instrução que crashou",
+    },
+    "crash_analyzer.triage_null_ptr_hint": {
+        "es": "**Causa probable:** el/los registro(s) `{regs}` valen `0x0` en el punto del crash -- probable desreferencia de puntero nulo.",
+        "en": "**Likely cause:** register(s) `{regs}` are `0x0` at the crash site -- probable NULL pointer dereference.",
+        "pt": "**Causa provável:** o(s) registrador(es) `{regs}` valem `0x0` no ponto do crash -- provável desreferência de ponteiro nulo.",
+    },
+    "crash_analyzer.triage_section_crossref": {
+        "es": "Funciones cruzadas contra el código fuente decompilado",
+        "en": "Frames cross-referenced against decompiled sources",
+        "pt": "Funções cruzadas com o código-fonte decompilado",
+    },
+    "crash_analyzer.triage_ghidra_label": {
+        "es": "Pseudo-C de Ghidra:",
+        "en": "Ghidra pseudo-C:",
+        "pt": "Pseudo-C do Ghidra:",
+    },
+    "crash_analyzer.triage_jadx_label": {
+        "es": "Java (jadx, método `{method}`):",
+        "en": "Java (jadx, method `{method}`):",
+        "pt": "Java (jadx, método `{method}`):",
+    },
+    "crash_analyzer.triage_no_matches": {
+        "es": "_No se encontraron coincidencias en `decompiled/` -- correr la decompilación (Utilidades → Re-decompilar) si todavía no se hizo, o el crash cae en una librería del sistema (no en el código propio del juego)._",
+        "en": "_No matches found under `decompiled/` -- run decompilation (Utilities → Re-decompile) if it hasn't been done yet, or the crash falls inside a system library (not the game's own code)._",
+        "pt": "_Nenhuma correspondência encontrada em `decompiled/` -- execute a decompilação (Utilitários → Re-decompilar) se ainda não foi feita, ou o crash ocorre em uma biblioteca do sistema (não no código do próprio jogo)._",
+    },
+    "crash_analyzer.triage_section_suggestion": {
+        "es": "Sugerencia",
+        "en": "Suggested next step",
+        "pt": "Sugestão",
+    },
+    "crash_analyzer.triage_suggestion_null_ptr": {
+        "es": "Revisar, en el pseudo-C listado arriba, de dónde viene el puntero que resultó `NULL` (¿es el retorno de una llamada JNI sin stub implementado? ¿un puntero de un allocator propio del motor que no se inicializó?). Ver la skill `so-crash-triage` para los patrones recurrentes de esta clase de bug.",
+        "en": "In the pseudo-C listed above, trace back where the `NULL` pointer came from (the return value of an unimplemented JNI stub? a pointer from the engine's own allocator that was never initialized?). See the `so-crash-triage` skill for recurring patterns in this bug class.",
+        "pt": "No pseudo-C listado acima, rastreie de onde veio o ponteiro `NULL` (o retorno de um stub JNI não implementado? um ponteiro do allocator próprio do motor que nunca foi inicializado?). Veja a skill `so-crash-triage` para os padrões recorrentes dessa classe de bug.",
+    },
+    "crash_analyzer.triage_suggestion_generic": {
+        "es": "Leer el pseudo-C de la(s) función(es) listada(s) arriba para entender qué se esperaba que pasara en ese punto, y si hay una llamada Java asociada, confirmar la semántica exacta en el archivo jadx referenciado antes de escribir un fix.",
+        "en": "Read the pseudo-C of the function(s) listed above to understand what was supposed to happen at that point, and if there's an associated Java call, confirm the exact semantics in the referenced jadx file before writing a fix.",
+        "pt": "Leia o pseudo-C da(s) função(ões) listada(s) acima para entender o que deveria acontecer naquele ponto, e se houver uma chamada Java associada, confirme a semântica exata no arquivo jadx referenciado antes de escrever uma correção.",
+    },
+    "crash_analyzer.triage_saved": {
+        "es": "[+] Resumen de triaje guardado en: {path}",
+        "en": "[+] Triage summary saved to: {path}",
+        "pt": "[+] Resumo de triagem salvo em: {path}",
+    },
+    "crash_analyzer.triage_save_failed": {
+        "es": "[-] No se pudo guardar el resumen de triaje: {error}",
+        "en": "[-] Couldn't save the triage summary: {error}",
+        "pt": "[-] Não foi possível salvar o resumo de triagem: {error}",
+    },
     "crash_analyzer.report_save_failed": {
         "es": "[-] No se pudo guardar el reporte: {error}",
         "en": "[-] Could not save the report: {error}",
@@ -221,16 +288,6 @@ STRINGS = {
         "es": "Crash dumps disponibles localmente:",
         "en": "Crash dumps available locally:",
         "pt": "Crash dumps disponíveis localmente:",
-    },
-    "crash_analyzer.menu_choose_prompt": {
-        "es": "Elegí uno [1] (Enter = el más reciente): ",
-        "en": "Choose one [1] (Enter = most recent): ",
-        "pt": "Escolha um [1] (Enter = mais recente): ",
-    },
-    "crash_analyzer.menu_invalid_choice": {
-        "es": "[-] Opción inválida.",
-        "en": "[-] Invalid option.",
-        "pt": "[-] Opção inválida.",
     },
 }
 i18n.register(STRINGS)
@@ -446,6 +503,175 @@ def _auto_find_files(project_dir, build_dir):
     return elf_file, so_file
 
 
+# ---------------------------------------------------------------------------
+# Cross-referenced triage (so-crash-triage methodology, automated)
+# ---------------------------------------------------------------------------
+#
+# Implements steps 4/6/7 of the docs/dev-notes/../.claude/skills/so-crash-triage
+# skill's manual procedure: resolve the crash address against the .so's
+# symbols (already done above by SymbolTable.lookup()), then grep the
+# project's own Ghidra-decompiled pseudo-C and jadx-decompiled Java for that
+# same function/method name, instead of the developer doing both greps by
+# hand for every crash. See docs/dev-notes/crash_analyzer.md.
+
+_SO_SYMBOL_RE = re.compile(r'-> (.+?)\]$')
+
+
+def _extract_so_symbol_name(resolved_str):
+    """!
+    @brief Pull the bare (demangled) function name out of `resolve()`'s
+           display string, e.g. `"0x981... [lib.so + 0x10 -> Foo::Bar(int) +
+           0x4]"` -> `"Foo::Bar(int)"`.
+    @param resolved_str One display string as produced by `analyze()`'s
+           internal `resolve()` closure.
+    @return The bare symbol name, or `None` if `resolved_str` isn't a
+            `.so`-resolved frame (no `"-> ... ]"` suffix).
+    """
+    m = _SO_SYMBOL_RE.search(resolved_str)
+    if not m:
+        return None
+    name = re.sub(r'\s*\+\s*0x[0-9a-f]+$', '', m.group(1))
+    return name or None
+
+
+def _find_ghidra_matches(project_dir, symbol_name, max_hits=5):
+    """!
+    @brief Grep every `decompiled/*/ghidra/*.c` file (Ghidra headless pseudo-C
+           output, written by `init_port.py`'s decompile step) for `symbol_name`.
+    @param project_dir Path to the port's project directory.
+    @param symbol_name Function name to search for (as produced by
+           `_extract_so_symbol_name()`).
+    @param max_hits Stop after this many matching lines (across all files).
+    @return list of `(file_path, line_no, line_text)` tuples.
+    """
+    if not symbol_name:
+        return []
+    hits = []
+    for c_path in sorted(glob.glob(os.path.join(project_dir, "decompiled", "*", "ghidra", "*.c"))):
+        try:
+            with open(c_path, "r", encoding="utf-8", errors="ignore") as f:
+                for i, line in enumerate(f, 1):
+                    if symbol_name in line:
+                        hits.append((c_path, i, line.strip()))
+                        if len(hits) >= max_hits:
+                            return hits
+        except OSError:
+            continue
+    return hits
+
+
+def _jni_method_name_from_symbol(raw_symbol):
+    """!
+    @brief Best-effort extraction of the Java method name from a `Java_...`
+           JNI export symbol, for cross-referencing against jadx sources.
+    @param raw_symbol Symbol name (e.g. `"Java_com_example_Game_nativeUpdate"`).
+    @return The likely Java method name (e.g. `"nativeUpdate"`), or `None` if
+            `raw_symbol` doesn't look like a JNI export.
+    @note JNI name mangling escapes a literal underscore in the original
+          Java identifier as `_1`, and separates an overload's signature
+          suffix with `__` -- this undoes both well enough for a search hint,
+          without claiming to be a full JNI demangler.
+    """
+    if not raw_symbol or not raw_symbol.startswith("Java_"):
+        return None
+    name = raw_symbol[len("Java_"):].split("__", 1)[0]
+    name = name.replace("_1", "\x00").replace("_", ".").replace("\x00", "_")
+    parts = [p for p in name.split(".") if p]
+    return parts[-1] if parts else None
+
+
+def _find_jadx_matches(project_dir, method_name, max_hits=5):
+    """!
+    @brief Grep every `decompiled/apk_jadx/sources/**/*.java` file (jadx
+           output, written by `init_port.py`'s decompile step) for `method_name`.
+    @param project_dir Path to the port's project directory.
+    @param method_name Java method name to search for (as produced by
+           `_jni_method_name_from_symbol()`).
+    @param max_hits Stop after this many matching lines (across all files).
+    @return list of `(file_path, line_no, line_text)` tuples.
+    """
+    if not method_name:
+        return []
+    hits = []
+    pattern = os.path.join(project_dir, "decompiled", "apk_jadx", "sources", "**", "*.java")
+    for java_path in sorted(glob.glob(pattern, recursive=True)):
+        try:
+            with open(java_path, "r", encoding="utf-8", errors="ignore") as f:
+                for i, line in enumerate(f, 1):
+                    if method_name in line:
+                        hits.append((java_path, i, line.strip()))
+                        if len(hits) >= max_hits:
+                            return hits
+        except OSError:
+            continue
+    return hits
+
+
+def _write_triage_summary(project_dir, dump_path, frame_strings, crash_instruction_line, null_ptr_regs):
+    """!
+    @brief Cross-reference every resolved crash frame against the project's
+           decompiled sources and write a consolidated `<dump_path>.triage_summary.md`.
+    @param project_dir Path to the port's project directory.
+    @param dump_path Path to the `.psp2dmp` being analyzed.
+    @param frame_strings Resolved frame display strings collected while
+           building `analyze()`'s call chain (PC/LR plus `.so`/`.elf` stack frames).
+    @param crash_instruction_line The disassembled crashing instruction line, if found.
+    @param null_ptr_regs Register numbers found to be `0x0` at the crash site.
+    """
+    seen_symbols = []
+    for frame in frame_strings:
+        name = _extract_so_symbol_name(frame)
+        if name and name not in seen_symbols:
+            seen_symbols.append(name)
+
+    lines = [f"# {t('crash_analyzer.triage_title')}", "", f"{t('crash_analyzer.triage_dump_line', path=dump_path)}", ""]
+
+    if crash_instruction_line:
+        lines += [f"## {t('crash_analyzer.triage_section_instruction')}", "", "```", crash_instruction_line, "```", ""]
+        if null_ptr_regs:
+            regs = ", ".join(f"r{i}" for i in sorted(set(null_ptr_regs)))
+            lines += [t("crash_analyzer.triage_null_ptr_hint", regs=regs), ""]
+
+    lines += [f"## {t('crash_analyzer.triage_section_crossref')}", ""]
+    any_cross_ref = False
+    for name in seen_symbols[:8]:
+        ghidra_hits = _find_ghidra_matches(project_dir, name)
+        jni_method = _jni_method_name_from_symbol(name)
+        jadx_hits = _find_jadx_matches(project_dir, jni_method) if jni_method else []
+        if not ghidra_hits and not jadx_hits:
+            continue
+        any_cross_ref = True
+        lines.append(f"### `{name}`")
+        lines.append("")
+        if ghidra_hits:
+            lines.append(f"**{t('crash_analyzer.triage_ghidra_label')}**")
+            for path, line_no, text in ghidra_hits:
+                rel = os.path.relpath(path, project_dir)
+                lines.append(f"- `{rel}:{line_no}` -- `{text}`")
+            lines.append("")
+        if jadx_hits:
+            lines.append(f"**{t('crash_analyzer.triage_jadx_label', method=jni_method)}**")
+            for path, line_no, text in jadx_hits:
+                rel = os.path.relpath(path, project_dir)
+                lines.append(f"- `{rel}:{line_no}` -- `{text}`")
+            lines.append("")
+
+    if not any_cross_ref:
+        lines += [t("crash_analyzer.triage_no_matches"), ""]
+
+    lines += [f"## {t('crash_analyzer.triage_section_suggestion')}", ""]
+    lines.append(t("crash_analyzer.triage_suggestion_null_ptr") if null_ptr_regs
+                 else t("crash_analyzer.triage_suggestion_generic"))
+
+    out_path = f"{dump_path}.triage_summary.md"
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"{C.GREEN}{t('crash_analyzer.triage_saved', path=out_path)}{C.RESET}")
+    except OSError as e:
+        print(f"{C.RED}{t('crash_analyzer.triage_save_failed', error=e)}{C.RESET}")
+
+
 def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None, so_base=None, stack_depth=36):
     """!
     @brief Parse a crash dump and print/write a full human-readable analysis report.
@@ -463,15 +689,16 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     @param so_base Known `.so` load base; auto-detected if omitted.
     @param stack_depth Number of stack words (above/below SP) to scan for
            backtrace candidates and address collection.
-    @return None. Prints the report to stdout and writes it to
-            `<dump_path>.analysis.txt`.
+    @return `True` if the report was produced and saved, `False` if the
+            toolchain failed to load or `dump_path` doesn't exist (both cases
+            print an error first) -- used by the headless CLI's exit code.
     """
     from . import config as cfgmod
     if global_cfg is None:
         global_cfg = cfgmod.load_global_config()
 
     if not _ensure_toolchain(global_cfg):
-        return
+        return False
     from core import CoreParser
     from elf import ElfParser
     from util import u32
@@ -486,7 +713,7 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
 
     if not os.path.exists(dump_path):
         print(f"{C.RED}{t('crash_analyzer.dump_not_found', path=dump_path)}{C.RESET}")
-        return
+        return False
 
     report = []
 
@@ -545,6 +772,10 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
             return f"0x{addr:x} [{so_name} + 0x{so_off:x}]"
         return f"0x{addr:x}"
 
+    triage_frames = []
+    crash_instruction_line = None
+    null_ptr_regs = []
+
     for thread in crashed:
         log(t("crash_analyzer.thread_crashed", name=thread.name, uid=thread.uid))
         log(t("crash_analyzer.stop_reason_line", code=thread.stop_reason, reason=t(STOP_REASONS[thread.stop_reason])))
@@ -576,9 +807,11 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
             for line in _disassemble_around(so_path, pc_off, is_thumb=True):
                 if crash_marker in line:
                     log(t("crash_analyzer.crash_instruction", line=line.strip()))
+                    crash_instruction_line = line.strip()
                     for i in range(13):
                         if f"r{i}" in line.lower() and thread.regs.gpr[i] == 0:
                             log(t("crash_analyzer.probable_cause_null_ptr", reg=i))
+                            null_ptr_regs.append(i)
 
         log(t("crash_analyzer.section_disasm_pc"))
         if so_base and 0x80000000 <= thread.pc <= 0x9fffffff and so_path:
@@ -608,6 +841,7 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
             if frame not in seen:
                 log(f"  -> {frame}")
                 seen.add(frame)
+        triage_frames.extend(chain)
 
     log("\n" + "=" * 80)
     log(t("crash_analyzer.section_modules_loaded"))
@@ -624,6 +858,9 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     except OSError as e:
         print(f"{C.RED}{t('crash_analyzer.report_save_failed', error=e)}{C.RESET}")
 
+    _write_triage_summary(project_dir, dump_path, triage_frames, crash_instruction_line, null_ptr_regs)
+    return True
+
 
 def analyze_menu(project_cfg, global_cfg):
     """!
@@ -637,11 +874,7 @@ def analyze_menu(project_cfg, global_cfg):
         print(f"{C.YELLOW}{t('crash_analyzer.menu_no_dumps')}{C.RESET}")
         print(f"{C.DIM}{t('crash_analyzer.menu_no_dumps_hint')}{C.RESET}")
         return
-    print(f"{C.BOLD}{t('crash_analyzer.menu_available_dumps')}{C.RESET}")
-    for i, p in enumerate(dumps, 1):
-        print(f"  {i:2d}. {p.name}")
-    choice = input(t("crash_analyzer.menu_choose_prompt")).strip() or "1"
-    if not choice.isdigit() or not (1 <= int(choice) <= len(dumps)):
-        print(f"{C.RED}{t('crash_analyzer.menu_invalid_choice')}{C.RESET}")
+    chosen = tui.select_list(t("crash_analyzer.menu_available_dumps"), dumps, label_fn=lambda p: p.name)
+    if chosen is None:
         return
-    analyze(project_cfg, str(dumps[int(choice) - 1]), global_cfg)
+    analyze(project_cfg, str(chosen), global_cfg)

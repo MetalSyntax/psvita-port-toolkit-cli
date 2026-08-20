@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from . import i18n
@@ -111,6 +112,56 @@ STRINGS = {
         "en": "{color_yellow}[-] There were no .glsl files in {dump_dir}.{color_reset}",
         "pt": "{color_yellow}[-] Não havia .glsl em {dump_dir}.{color_reset}",
     },
+    "utils.shader_compiler_missing": {
+        "es": "[!] No se encontró psp2cgc/cgc en VITASDK ni en PATH -- no se puede validar localmente (ver 'Doctor').",
+        "en": "[!] psp2cgc/cgc not found in VITASDK or PATH -- can't validate locally (see 'Doctor').",
+        "pt": "[!] psp2cgc/cgc não encontrado no VITASDK nem no PATH -- não é possível validar localmente (ver 'Doctor').",
+    },
+    "utils.shader_validate_no_dir": {
+        "es": "{color_yellow}[-] No existe {path} -- traducí los shaders primero.{color_reset}",
+        "en": "{color_yellow}[-] {path} doesn't exist -- translate the shaders first.{color_reset}",
+        "pt": "{color_yellow}[-] {path} não existe -- traduza os shaders primeiro.{color_reset}",
+    },
+    "utils.shader_validate_no_files": {
+        "es": "{color_yellow}[-] No hay archivos .cg en {path}.{color_reset}",
+        "en": "{color_yellow}[-] No .cg files in {path}.{color_reset}",
+        "pt": "{color_yellow}[-] Nenhum arquivo .cg em {path}.{color_reset}",
+    },
+    "utils.shader_validate_start": {
+        "es": "[*] Validando {count} shader(s) .cg con psp2cgc...",
+        "en": "[*] Validating {count} .cg shader(s) with psp2cgc...",
+        "pt": "[*] Validando {count} shader(s) .cg com psp2cgc...",
+    },
+    "utils.shader_validate_unknown_profile": {
+        "es": "{name}: no se pudo adivinar si es vertex o fragment por el nombre -- renombrar con 'vert'/'frag' en el nombre, o validar a mano.",
+        "en": "{name}: couldn't guess vertex vs. fragment from the filename -- rename with 'vert'/'frag' in the name, or validate by hand.",
+        "pt": "{name}: não foi possível adivinhar se é vertex ou fragment pelo nome -- renomeie com 'vert'/'frag' no nome, ou valide manualmente.",
+    },
+    "utils.shader_stage_vertex": {
+        "es": "vertex",
+        "en": "vertex",
+        "pt": "vertex",
+    },
+    "utils.shader_stage_fragment": {
+        "es": "fragment",
+        "en": "fragment",
+        "pt": "fragment",
+    },
+    "utils.shader_validate_summary_ok": {
+        "es": "[+] Todos los shaders compilan -- listos para subir por FTP.",
+        "en": "[+] Every shader compiles -- ready to upload over FTP.",
+        "pt": "[+] Todos os shaders compilam -- prontos para enviar por FTP.",
+    },
+    "utils.shader_validate_summary_fail": {
+        "es": "[-] {count} shader(s) con errores -- corregir antes de subir.",
+        "en": "[-] {count} shader(s) with errors -- fix before uploading.",
+        "pt": "[-] {count} shader(s) com erros -- corrija antes de enviar.",
+    },
+    "utils.shader_uniforms_generated": {
+        "es": "[+] Esqueletos de uniforms de {count} shader(s) generados en {path}",
+        "en": "[+] Uniform skeletons for {count} shader(s) generated at {path}",
+        "pt": "[+] Esqueletos de uniforms de {count} shader(s) gerados em {path}",
+    },
     "utils.docs_missing_deep_translator": {
         "es": "{color_red}[-] Falta 'deep-translator' -- instalar con: pip install deep-translator{color_reset}",
         "en": "{color_red}[-] 'deep-translator' is missing -- install it with: pip install deep-translator{color_reset}",
@@ -197,29 +248,29 @@ STRINGS = {
         "pt": "{color_green}[+] docs/api/*.md gerado para {count} módulo(s).{color_reset}",
     },
     "utils.gen_docs_menu_title": {
-        "es": "📖 Generador de Documentación",
-        "en": "📖 Documentation Generator",
-        "pt": "📖 Gerador de Documentação",
+        "es": "Generador de Documentación",
+        "en": "Documentation Generator",
+        "pt": "Gerador de Documentação",
     },
     "utils.gen_docs_opt_project": {
-        "es": "🎮 Extraer comentarios del proyecto activo ({game_name} → docs/*.md)",
-        "en": "🎮 Extract comments from active project ({game_name} → docs/*.md)",
-        "pt": "🎮 Extrair comentários do projeto ativo ({game_name} → docs/*.md)",
+        "es": "Extraer comentarios del proyecto activo ({game_name} → docs/*.md)",
+        "en": "Extract comments from active project ({game_name} → docs/*.md)",
+        "pt": "Extrair comentários do projeto ativo ({game_name} → docs/*.md)",
     },
     "utils.gen_docs_opt_manual": {
-        "es": "🎯 Elegir archivo o carpeta manual (.c, .h, .cpp) → docs/*.md",
-        "en": "🎯 Choose manual file or folder (.c, .h, .cpp) → docs/*.md",
-        "pt": "🎯 Escolher arquivo ou pasta manual (.c, .h, .cpp) → docs/*.md",
+        "es": "Elegir archivo o carpeta manual (.c, .h, .cpp) → docs/*.md",
+        "en": "Choose manual file or folder (.c, .h, .cpp) → docs/*.md",
+        "pt": "Escolher arquivo ou pasta manual (.c, .h, .cpp) → docs/*.md",
     },
     "utils.gen_docs_opt_auto": {
-        "es": "⚡ Documentar módulos del propio toolkit (psvita_toolkit → docs/api/*.md)",
-        "en": "⚡ Document toolkit's own modules (psvita_toolkit → docs/api/*.md)",
-        "pt": "⚡ Documentar módulos do próprio toolkit (psvita_toolkit → docs/api/*.md)",
+        "es": "Documentar módulos del propio toolkit (psvita_toolkit → docs/api/*.md)",
+        "en": "Document toolkit's own modules (psvita_toolkit → docs/api/*.md)",
+        "pt": "Documentar módulos do próprio toolkit (psvita_toolkit → docs/api/*.md)",
     },
     "utils.gen_docs_opt_skeletons": {
-        "es": "🦴 Insertar esqueletos Doxygen faltantes en el toolkit",
-        "en": "🦴 Insert missing Doxygen skeletons in toolkit",
-        "pt": "🦴 Inserir esqueletos Doxygen ausentes no toolkit",
+        "es": "Insertar esqueletos Doxygen faltantes en el toolkit",
+        "en": "Insert missing Doxygen skeletons in toolkit",
+        "pt": "Inserir esqueletos Doxygen ausentes no toolkit",
     },
     "utils.gen_docs_manual_prompt": {
         "es": "Ruta del archivo o carpeta a procesar (.c, .h, .cpp):",
@@ -371,6 +422,220 @@ def translate_shaders_boilerplate(project_cfg):
         print(t("utils.shaders_manual_review_warning", color_yellow=C.YELLOW, color_reset=C.RESET))
     else:
         print(t("utils.shaders_no_glsl_found", color_yellow=C.YELLOW, dump_dir=dump_dir, color_reset=C.RESET))
+
+
+# ---------------------------------------------------------------------------
+# Shader validation (psp2cgc) and uniform/sampler skeleton extraction
+# ---------------------------------------------------------------------------
+
+_SHADER_COMPILER_CANDIDATES = ("psp2cgc", "cgc")
+
+# Sony's PS Vita Cg profiles (VITASDK's psp2cgc front-end) -- NOT the
+# DirectX-era "vs_2_0"/"ps_2_0" profile names some generic Cg documentation
+# mentions, which don't apply to this target. See docs/dev-notes/utils.md.
+_VERTEX_PROFILE = "sce_vp_psp2"
+_FRAGMENT_PROFILE = "sce_fp_psp2"
+_VERTEX_NAME_HINTS = ("vert", "_vs", "vs_", "vp_", "-vs", "-vp")
+_FRAGMENT_NAME_HINTS = ("frag", "_fs", "fs_", "fp_", "-fs", "-fp")
+
+
+def _find_shader_compiler(global_cfg):
+    """!
+    @brief Look for `psp2cgc` (VITASDK's Cg shader compiler front-end) or its
+           older name `cgc`, in `$VITASDK/bin` first, then `PATH`.
+    @param global_cfg Global config dict; reads `vitasdk`.
+    @return Full path to the compiler if found, `None` otherwise.
+    """
+    from . import doctor
+    vitasdk_bin = os.path.join((global_cfg or {}).get("vitasdk", ""), "bin") if global_cfg else ""
+    for name in _SHADER_COMPILER_CANDIDATES:
+        path = doctor._find_binary(name, vitasdk_bin)
+        if path:
+            return path
+    return None
+
+
+def guess_shader_profile(cg_path):
+    """!
+    @brief Guess whether a `.cg` file is a vertex or fragment shader, from its filename.
+    @param cg_path Path to the `.cg` file.
+    @return `_VERTEX_PROFILE`, `_FRAGMENT_PROFILE`, or `None` if the filename
+            gives no hint either way (caller should ask, or try both).
+    """
+    name = Path(cg_path).stem.lower()
+    if any(hint in name for hint in _VERTEX_NAME_HINTS):
+        return _VERTEX_PROFILE
+    if any(hint in name for hint in _FRAGMENT_NAME_HINTS):
+        return _FRAGMENT_PROFILE
+    return None
+
+
+def validate_shader(cg_path, profile, global_cfg):
+    """!
+    @brief Compile a single `.cg` shader locally with `psp2cgc`, without
+           uploading anything -- catches Cg syntax errors before they'd only
+           surface as a runtime shader-compile failure on the console.
+    @param cg_path Path to the `.cg` file to validate.
+    @param profile Cg profile to compile against (`_VERTEX_PROFILE` or `_FRAGMENT_PROFILE`).
+    @param global_cfg Global config dict; used to locate the compiler.
+    @return `(ok, message)` -- `message` is the compiler's own stderr/stdout
+            (already includes the exact failing line/column when it fails),
+            or an explanation if no compiler was found (`ok` is `None` in
+            that case, distinguishing "couldn't check" from "checked, failed").
+    """
+    compiler = _find_shader_compiler(global_cfg)
+    if not compiler:
+        return None, t("utils.shader_compiler_missing")
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / (Path(cg_path).stem + ".gxp")
+        try:
+            r = subprocess.run(
+                [compiler, "-profile", profile, "-o", str(out_path), str(cg_path)],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            return False, str(e)
+        ok = r.returncode == 0 and out_path.exists()
+        message = (r.stderr or r.stdout).strip()
+        return ok, message
+
+
+def validate_all_shaders(project_cfg, global_cfg):
+    """!
+    @brief Validate every `.cg` shader in `assets/cg/` with `psp2cgc`, printing
+           an immediate OK/error per file -- meant to run right before
+           `ftp_ops.upload_cg_shaders()`.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict.
+    """
+    cg_dir = Path(project_cfg["_project_dir"]) / "assets" / "cg"
+    if not cg_dir.is_dir():
+        print(t("utils.shader_validate_no_dir", color_yellow=C.YELLOW, path=cg_dir, color_reset=C.RESET))
+        return
+
+    cg_files = sorted(p for p in cg_dir.iterdir() if p.suffix == ".cg" and not p.name.startswith("._"))
+    if not cg_files:
+        print(t("utils.shader_validate_no_files", color_yellow=C.YELLOW, path=cg_dir, color_reset=C.RESET))
+        return
+
+    if not _find_shader_compiler(global_cfg):
+        print(f"{C.YELLOW}{t('utils.shader_compiler_missing')}{C.RESET}")
+        return
+
+    print(t("utils.shader_validate_start", count=len(cg_files)))
+    fail_count = 0
+    for cg_file in cg_files:
+        profile = guess_shader_profile(cg_file)
+        if profile is None:
+            print(f"  [!] {t('utils.shader_validate_unknown_profile', name=cg_file.name)}")
+            continue
+        ok, message = validate_shader(cg_file, profile, global_cfg)
+        stage = t("utils.shader_stage_vertex") if profile == _VERTEX_PROFILE else t("utils.shader_stage_fragment")
+        if ok:
+            print(f"  {C.GREEN}[OK] {cg_file.name}{C.RESET} ({stage})")
+        else:
+            fail_count += 1
+            print(f"  {C.RED}[FAIL] {cg_file.name}{C.RESET} ({stage})")
+            if message:
+                for line in message.splitlines():
+                    print(f"      {C.DIM}{line}{C.RESET}")
+
+    print()
+    if fail_count:
+        print(f"{C.RED}{t('utils.shader_validate_summary_fail', count=fail_count)}{C.RESET}")
+    else:
+        print(f"{C.GREEN}{t('utils.shader_validate_summary_ok')}{C.RESET}")
+
+
+_GLSL_UNIFORM_RE = re.compile(
+    r'^\s*uniform\s+(?:highp|mediump|lowp)?\s*(\w+)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;', re.M)
+
+_GLSL_SAMPLER_TYPES = ("sampler2D", "samplerCube", "sampler2DShadow", "samplerExternalOES")
+
+# Component count per GLSL type, for sizing the generated C array member.
+_GLSL_TYPE_COMPONENTS = {
+    "float": 1, "int": 1, "bool": 1,
+    "vec2": 2, "vec3": 3, "vec4": 4,
+    "ivec2": 2, "ivec3": 3, "ivec4": 4,
+    "mat2": 4, "mat3": 9, "mat4": 16,
+}
+
+
+def extract_shader_uniforms(glsl_path):
+    """!
+    @brief Extract every `uniform` declaration from a dumped GLSL shader.
+    @param glsl_path Path to a `.glsl` file (as downloaded to `glsl_dump/`).
+    @return `(uniforms, samplers)` -- `uniforms` is a list of `(glsl_type,
+            name, array_len_or_None)`; `samplers` is a list of `(sampler_type, name)`.
+    """
+    text = Path(glsl_path).read_text(errors="ignore")
+    uniforms, samplers = [], []
+    for glsl_type, name, array_len in _GLSL_UNIFORM_RE.findall(text):
+        if glsl_type in _GLSL_SAMPLER_TYPES:
+            samplers.append((glsl_type, name))
+        else:
+            uniforms.append((glsl_type, name, int(array_len) if array_len else None))
+    return uniforms, samplers
+
+
+def generate_uniform_skeletons(project_cfg):
+    """!
+    @brief Generate a C header with one struct skeleton per dumped GLSL
+           shader, one member per `uniform` declaration found (samplers
+           listed separately as a comment, since they're texture bindings,
+           not struct members).
+    @param project_cfg Per-project config dict.
+    @note Names/types/order are extracted mechanically from the GLSL source
+          -- always confirm against the engine's actual uniform-binding code
+          (`glGetUniformLocation`/`glUniform*` call sites) before trusting
+          the generated layout; see docs/dev-notes/utils.md.
+    """
+    project_dir = Path(project_cfg["_project_dir"])
+    dump_dir = project_dir / "glsl_dump"
+    if not dump_dir.is_dir():
+        print(t("utils.shaders_no_dump_dir", color_yellow=C.YELLOW, dump_dir=dump_dir, color_reset=C.RESET))
+        return
+
+    lines = [
+        "/* Auto-generated by psvita-toolkit from glsl_dump/*.glsl -- uniform/sampler skeletons. */",
+        "/* Names/types/order are extracted mechanically -- confirm against the engine's own */",
+        "/* uniform-binding code before trusting this layout. */",
+        "",
+        "#pragma once",
+        "",
+    ]
+    shader_count = 0
+    for glsl_file in sorted(dump_dir.glob("*.glsl")):
+        if glsl_file.name.startswith("._"):
+            continue
+        uniforms, samplers = extract_shader_uniforms(glsl_file)
+        if not uniforms and not samplers:
+            continue
+        shader_count += 1
+        struct_name = re.sub(r'[^A-Za-z0-9_]', '_', glsl_file.stem)
+        lines.append(f"// {glsl_file.name}")
+        if uniforms:
+            lines.append(f"typedef struct {struct_name}_Uniforms {{")
+            for glsl_type, name, array_len in uniforms:
+                components = _GLSL_TYPE_COMPONENTS.get(glsl_type, 1)
+                total = components * (array_len or 1)
+                c_type = "int" if glsl_type in ("int", "bool", "ivec2", "ivec3", "ivec4") else "float"
+                lines.append(f"    {c_type} {name}[{total}];  // {glsl_type}" if total > 1
+                             else f"    {c_type} {name};  // {glsl_type}")
+            lines.append(f"}} {struct_name}_Uniforms;")
+        if samplers:
+            lines.append(f"// Samplers (texture bindings, not struct members): "
+                          + ", ".join(f"{stype} {sname}" for stype, sname in samplers))
+        lines.append("")
+
+    if not shader_count:
+        print(t("utils.shaders_no_glsl_found", color_yellow=C.YELLOW, dump_dir=dump_dir, color_reset=C.RESET))
+        return
+
+    source_dir = project_dir / "source"
+    out_file = (source_dir if source_dir.is_dir() else project_dir) / "generated_shader_uniforms.h"
+    out_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"{C.GREEN}{t('utils.shader_uniforms_generated', count=shader_count, path=out_file)}{C.RESET}")
 
 
 def translate_docs(project_cfg, target_lang="en", custom_path=None, overwrite=False):
@@ -603,7 +868,6 @@ def generate_toolkit_docs(project_cfg=None):
     tui.run_menu(
         t("utils.gen_docs_menu_title"),
         items,
-        icon="📖",
     )
 
 

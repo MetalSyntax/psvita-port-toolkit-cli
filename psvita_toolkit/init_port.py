@@ -40,6 +40,11 @@ STRINGS = {
         "en": "Checking prerequisites...",
         "pt": "Verificando pré-requisitos...",
     },
+    "init_port.analyzing_engine_title": {
+        "es": "Analizando motor y generando candidatos de stubs JNI...",
+        "en": "Analyzing engine and generating JNI stub candidates...",
+        "pt": "Analisando o motor e gerando candidatos de stubs JNI...",
+    },
     "init_port.jadx_found": {
         "es": "encontrado",
         "en": "found",
@@ -751,9 +756,9 @@ STRINGS = {
         "pt": "Criando port: {game_name}",
     },
     "init_port.wizard_done": {
-        "es": "✅ Listo: {new_dir}",
-        "en": "✅ Done: {new_dir}",
-        "pt": "✅ Pronto: {new_dir}",
+        "es": "Listo: {new_dir}",
+        "en": "Done: {new_dir}",
+        "pt": "Pronto: {new_dir}",
     },
     "init_port.next_step": {
         "es": "Siguiente paso: seguir PORTING_PLAN.md sección 4 (empezando por la Fase 3,\nanálisis real del motor) antes de escribir código en source/.",
@@ -822,14 +827,14 @@ def check_prereqs(global_cfg):
     print(f"{C.BOLD}{t('init_port.checking_prereqs')}{C.RESET}")
     have_jadx = _have("jadx")
     jadx_status = t("init_port.jadx_found") if have_jadx else t("init_port.jadx_missing")
-    print(f"  {'✅' if have_jadx else '⚠️ '} jadx {jadx_status}")
+    print(f"  {'[+]' if have_jadx else '[!]'} jadx {jadx_status}")
 
     have_docker_so = _have_docker_image("devrvk/so-decompiler")
     if _have("docker"):
         docker_status = t("init_port.docker_so_found") if have_docker_so else t("init_port.docker_so_missing")
-        print(f"  {'✅' if have_docker_so else '⚠️ '} docker + devrvk/so-decompiler {docker_status}")
+        print(f"  {'[+]' if have_docker_so else '[!]'} docker + devrvk/so-decompiler {docker_status}")
     else:
-        print(f"  ⚠️  {t('init_port.docker_not_found')}")
+        print(f"  [!] {t('init_port.docker_not_found')}")
 
     for tool in ("git", "unzip"):
         if not _have(tool):
@@ -886,7 +891,7 @@ def _own_titleid(project_dir):
 
 def prompt_inputs(global_cfg):
     tui.clear()
-    tui.print_banner(t("init_port.wizard_title"), icon="🆕")
+    tui.print_banner(t("init_port.wizard_title"))
 
     game_name = input(f"{C.BOLD}{t('init_port.game_name_prompt')}{C.RESET}\n> ").strip()
     if not game_name:
@@ -1336,6 +1341,26 @@ def write_claude_md_and_skills(global_cfg, ctx):
     print(f"{C.GREEN}{t('init_port.claude_md_written')}{C.RESET}")
 
 
+def analyze_engine_and_jni(ctx):
+    """!
+    @brief Post-decompile step: fingerprint known middleware in the primary
+           `.so`, generate FalsoJNI callback-stub candidates from the
+           decompiled Java, and document detected lifecycle methods in the
+           freshly-written `PORTING_PLAN.md`.
+    @param ctx Wizard context dict (needs `new_dir`).
+    @note Best-effort and non-fatal: an engine with no `native` methods
+          found yet (e.g. jadx wasn't available) simply skips this silently
+          -- it's meant to save time when the sources are already there, not
+          to block port creation when they aren't.
+    """
+    from . import jni_analyzer
+    new_dir = ctx["new_dir"]
+    print(f"\n{C.BOLD}{t('init_port.analyzing_engine_title')}{C.RESET}")
+    jni_analyzer.middleware_report({"_project_dir": str(new_dir)})
+    jni_analyzer.generate_jni_stubs({"_project_dir": str(new_dir)})
+    jni_analyzer.document_lifecycle_in_plan({"_project_dir": str(new_dir)})
+
+
 def write_project_config(ctx):
     project_cfg = cfgmod.new_project_config(
         game_name=ctx["game_name"], slug=ctx["slug"],
@@ -1360,12 +1385,13 @@ def run_wizard(global_cfg):
         ctx = prompt_inputs(global_cfg)
 
         tui.clear()
-        tui.print_banner(t("init_port.creating_port_title", game_name=ctx['game_name']), icon="🆕")
+        tui.print_banner(t("init_port.creating_port_title", game_name=ctx['game_name']))
         setup_repo_dir(global_cfg, ctx)
         place_apk_and_detect(ctx)
         decompile(global_cfg, ctx, have_jadx, have_docker_so)
         git_init_and_ignore(ctx)
         write_plan_and_progress(ctx)
+        analyze_engine_and_jni(ctx)
         write_claude_md_and_skills(global_cfg, ctx)
         project_cfg = write_project_config(ctx)
 
@@ -1379,3 +1405,68 @@ def run_wizard(global_cfg):
         print(f"{C.RED}[-] {e}{C.RESET}")
         tui.pause()
         return None
+
+
+def run_wizard_headless(global_cfg, apk_path, game_name, titleid=None, slug=None,
+                         folder_name=None, vita_ip="192.168.1.100"):
+    """!
+    @brief Non-interactive equivalent of `run_wizard()`, for the `psvita-toolkit
+           init` CLI subcommand: builds the same `ctx` dict `prompt_inputs()`
+           would have, from arguments instead of prompts, then runs the exact
+           same pipeline (`setup_repo_dir` -> ... -> `write_project_config`).
+    @param global_cfg Global config dict.
+    @param apk_path Path to the source `.apk` (required, must exist).
+    @param game_name Display name of the game (required).
+    @param titleid 9-character TITLEID; auto-assigned only if this project
+           directory already has its own (see `_own_titleid()`) -- otherwise
+           required, since there's no interactive collision-resolution retry.
+    @param slug Internal slug; derived from `game_name` if omitted.
+    @param folder_name Destination folder name (under `base_dir`); derived
+           from `game_name` if omitted.
+    @param vita_ip Test PS Vita's IP address.
+    @return Ready-to-use per-project config dict.
+    @raise RuntimeError on any invalid/missing/colliding input -- the CLI
+           layer is expected to catch this and exit non-zero with the message.
+    """
+    apk_path = str(Path(apk_path).expanduser())
+    if not Path(apk_path).exists():
+        raise RuntimeError(t("tui.path_not_found", path=apk_path))
+    if not game_name:
+        raise RuntimeError(t("init_port.game_name_required"))
+
+    slug = slug or _default_slug(game_name)
+    folder_name = folder_name or (game_name.replace(" ", "-") + "-vita")
+    project_name = slug.replace("-", "_")
+
+    base_dir = Path(global_cfg["base_dir"])
+    new_dir = base_dir / folder_name
+    own_id = _own_titleid(new_dir)
+
+    used_ids = _used_titleids(base_dir)
+    if own_id:
+        used_ids.discard(own_id)
+
+    titleid = (titleid or own_id or "").strip().upper()
+    if len(titleid) != 9:
+        raise RuntimeError(t("init_port.titleid_length_error"))
+    if titleid in used_ids:
+        raise RuntimeError(t("init_port.titleid_in_use"))
+
+    ctx = {
+        "game_name": game_name, "slug": slug, "folder_name": folder_name,
+        "project_name": project_name, "apk_path": apk_path,
+        "vita_ip": vita_ip, "titleid": titleid, "new_dir": new_dir,
+    }
+
+    have_jadx, have_docker_so = check_prereqs(global_cfg)
+    print(f"\n{C.BOLD}{t('init_port.creating_port_title', game_name=ctx['game_name'])}{C.RESET}")
+    setup_repo_dir(global_cfg, ctx)
+    place_apk_and_detect(ctx)
+    decompile(global_cfg, ctx, have_jadx, have_docker_so)
+    git_init_and_ignore(ctx)
+    write_plan_and_progress(ctx)
+    analyze_engine_and_jni(ctx)
+    write_claude_md_and_skills(global_cfg, ctx)
+    project_cfg = write_project_config(ctx)
+    print(f"{C.GREEN}{t('init_port.wizard_done', new_dir=ctx['new_dir'])}{C.RESET}")
+    return project_cfg

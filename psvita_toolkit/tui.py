@@ -5,12 +5,23 @@
 
 @details
 Global navigation available in ANY menu, at any level of depth:
-  - ↑/↓ arrows   move the selection
-  - Enter        choose the selected item
-  - 1-9          jump directly to that numbered option
-  - 0 / Q        go back one level (returns to the menu that called this one)
-  - M            jump directly to the MAIN menu from anywhere
-  - Ctrl+C       same as 'M' while navigating (never kills the process abruptly)
+  - Up/Down arrows   move the selection
+  - Enter            choose the selected item
+  - 1-9              jump directly to options 1-9
+  - a, b, c, ...      jump directly to option 10 and beyond (letters skip
+                      j/k/m/q, since those are reserved navigation keys)
+  - /                enter search mode: type to filter the visible options
+                      by label, Up/Down to move within the filtered list,
+                      Enter to choose, Backspace on an empty query (or
+                      Ctrl+C) to leave search mode
+  - 0 / Q            go back one level (returns to the menu that called this one)
+  - M                jump directly to the MAIN menu from anywhere
+  - Ctrl+C           same as 'M' while navigating (never kills the process abruptly)
+
+`select_list()` shares the same rendering/navigation core as `run_menu()` --
+it is the picker used for "choose one of these VPKs/dumps/profiles"-style
+lists throughout the toolkit, so every selectable list in the app gets the
+same shortcuts, search, and look for free.
 
 See `docs/dev-notes/tui.md` for the rationale behind avoiding `curses`, the
 `termios`-based `getch()`, and the exception-based navigation model.
@@ -18,6 +29,8 @@ See `docs/dev-notes/tui.md` for the rationale behind avoiding `curses`, the
 
 import glob
 import os
+import re
+import select
 import shutil
 import sys
 import textwrap
@@ -25,6 +38,7 @@ from pathlib import Path
 
 from . import i18n
 from .i18n import t
+from .icons import Icons
 
 STRINGS = {
     "tui.press_enter": {
@@ -33,9 +47,29 @@ STRINGS = {
         "pt": "Pressione ENTER para continuar...",
     },
     "tui.footer_hint": {
-        "es": "↑/↓ mover · Enter elegir · 1-9 salto directo · 0/Q volver · M menú principal · Ctrl+C salir",
-        "en": "↑/↓ move · Enter select · 1-9 jump · 0/Q back · M main menu · Ctrl+C exit",
-        "pt": "↑/↓ mover · Enter selecionar · 1-9 atalho · 0/Q voltar · M menu principal · Ctrl+C sair",
+        "es": "↑/↓ mover · Enter elegir · 1-9,a-z salto directo · / buscar · 0/Q volver · M menú principal · Ctrl+C salir",
+        "en": "↑/↓ move · Enter select · 1-9,a-z jump · / search · 0/Q back · M main menu · Ctrl+C exit",
+        "pt": "↑/↓ mover · Enter selecionar · 1-9,a-z atalho · / buscar · 0/Q voltar · M menu principal · Ctrl+C sair",
+    },
+    "tui.footer_hint_search": {
+        "es": "↑/↓ mover · Enter elegir · Backspace borrar/salir · Esc o Ctrl+C salir de la búsqueda",
+        "en": "↑/↓ move · Enter select · Backspace delete/exit · Esc or Ctrl+C exit search",
+        "pt": "↑/↓ mover · Enter selecionar · Backspace apagar/sair · Esc ou Ctrl+C sair da busca",
+    },
+    "tui.search_prompt": {
+        "es": "Buscar",
+        "en": "Search",
+        "pt": "Buscar",
+    },
+    "tui.search_no_matches": {
+        "es": "(sin resultados)",
+        "en": "(no matches)",
+        "pt": "(sem resultados)",
+    },
+    "tui.no_items": {
+        "es": "(nada para mostrar)",
+        "en": "(nothing to show)",
+        "pt": "(nada para mostrar)",
     },
     "tui.interrupted": {
         "es": "[!] Operación interrumpida.",
@@ -99,6 +133,22 @@ class SwitchProject(Exception):
     """
 
 
+class MenuResult(Exception):
+    """!
+    @brief Raise from a `run_menu()` callback to make `run_menu()` return
+           `value` immediately to ITS caller, skipping the usual
+           pause()-then-redraw-the-same-menu cycle.
+    @details For menu items whose whole point is to hand control to a
+             different screen and report back what happened there (e.g. the
+             project picker's "continue with this port" -> the caller wants
+             the chosen project config right away, not an Enter-to-continue
+             prompt followed by the picker menu again).
+    """
+    def __init__(self, value=None):
+        super().__init__()
+        self.value = value
+
+
 def clear():
     # \033[H = cursor home, \033[2J = clear entire screen, \033[3J = clear scrollback buffer
     sys.stdout.write("\033[H\033[2J\033[3J")
@@ -111,11 +161,11 @@ def term_width(default=80):
 
 def getch():
     """!
-    @brief Read a single character (or an arrow-key escape sequence) without
-           waiting for Enter.
-    @return The character read, or the 3-character escape sequence for an
-            arrow key (e.g. `"\\x1b[A"` for the up arrow).
-    @note macOS/Linux only -- relies on `termios`/`tty` raw mode.
+    @brief Read a single character or escape sequence without waiting for Enter.
+    @return The character read, or the full escape sequence for an arrow/function
+            key (e.g. `"\\x1b[A"` or `"\\x1bOA"` for Up arrow, `"\\x1b"` for lone Escape).
+    @note macOS/Linux raw terminal read using os.read(fd) directly to prevent
+          Python's TextIOWrapper buffer from swallowing multi-byte escape bursts.
     """
     import termios
     import tty
@@ -123,12 +173,13 @@ def getch():
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == "\x1b":
-            ch += sys.stdin.read(2)
+        raw = os.read(fd, 32)
+        try:
+            return raw.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ch
 
 
 def pause(msg=None):
@@ -151,26 +202,209 @@ def confirm(prompt, default=True):
     return raw in ("s", "si", "sí", "sim", "y", "yes")
 
 
-def print_banner(title, subtitle=None, breadcrumb=None, icon="🎮"):
+def print_banner(title, subtitle=None, breadcrumb=None):
     width = min(term_width(), 78)
     bar = "═" * width
     print(f"{C.CYAN}{C.BOLD}╔{bar}╗{C.RESET}")
-    line = f"{icon}  {title}"
-    print(f"{C.CYAN}{C.BOLD}║{C.RESET}{line.center(width)}{C.CYAN}{C.BOLD}║{C.RESET}")
+    print(f"{C.CYAN}{C.BOLD}║{C.RESET}{C.BOLD}{title.center(width)}{C.RESET}{C.CYAN}{C.BOLD}║{C.RESET}")
     if subtitle:
         print(f"{C.CYAN}{C.BOLD}║{C.RESET}{C.DIM}{subtitle.center(width)}{C.RESET}{C.CYAN}{C.BOLD}║{C.RESET}")
     print(f"{C.CYAN}{C.BOLD}╚{bar}╝{C.RESET}")
     if breadcrumb:
-        print(f"{C.DIM}📍 {breadcrumb}{C.RESET}")
+        print(f"{C.DIM}{breadcrumb}{C.RESET}")
     print()
 
 
-def _footer_hint():
+def _footer_hint(search_mode=False):
     print()
-    print(f"{C.DIM}{t('tui.footer_hint')}{C.RESET}")
+    key = "tui.footer_hint_search" if search_mode else "tui.footer_hint"
+    print(f"{C.DIM}{t(key)}{C.RESET}")
 
 
-def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_extra=None):
+# ---------------------------------------------------------------------------
+# Shared selection core -- powers both run_menu() (fire-and-forget callbacks)
+# and select_list() (returns the chosen entry), so every menu and every
+# "pick one from this list" picker in the toolkit gets identical shortcuts,
+# search, and look for free.
+# ---------------------------------------------------------------------------
+
+# Letters usable as direct-jump shortcuts for option 10 onward. j/k/m/q are
+# reserved (Up/Down-alternative, main menu, back), so they're skipped.
+_LETTER_POOL = tuple(c for c in "abcdefghijklmnopqrstuvwxyz" if c not in ("j", "k", "m", "q"))
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def _strip_ansi(s):
+    return _ANSI_RE.sub("", s)
+
+
+def _shortcut_for_index(i):
+    """!
+    @brief Single-key shortcut for item index `i`: '1'-'9' for the first nine
+           items, then a letter (skipping j/k/m/q) for item 10 onward.
+    @param i Zero-based item index.
+    @return Shortcut string, or `None` once the shortcut pool (9 digits + the
+            available letters) is exhausted -- those items are still reachable
+            with the arrow keys.
+    """
+    if i < 9:
+        return str(i + 1)
+    li = i - 9
+    return _LETTER_POOL[li] if li < len(_LETTER_POOL) else None
+
+
+def _shortcut_index_map(n):
+    return {sc: i for i in range(n) if (sc := _shortcut_for_index(i))}
+
+
+def _filter_indices(labels, query):
+    """!
+    @return Original indices whose label matches `query` (case-insensitive
+            substring, ANSI color codes ignored), in original order.
+    """
+    if not query:
+        return list(range(len(labels)))
+    q = query.lower()
+    return [i for i, label in enumerate(labels) if q in _strip_ansi(label).lower()]
+
+
+def _navigate(title, labels, breadcrumb="", subtitle=None, header_extra=None, searchable=True):
+    """!
+    @brief Render an arrow-key/shortcut/search-filterable list and drive it
+           until the user picks an item or backs out. Shared by `run_menu()`
+           and `select_list()`.
+    @param labels Display labels, in order (may already contain ANSI codes).
+    @param searchable Whether '/' enters search mode.
+    @return Zero-based index into `labels` the user picked, or `None` if they
+            backed out (0/Q, or Backspace-from-empty-query in search mode).
+    @note Raises `GoToMainMenu` on 'M' or Ctrl+C, from either mode.
+    """
+    n = len(labels)
+    idx = 0
+    search_mode = False
+    query = ""
+    filtered = list(range(n))
+
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
+        while True:
+            clear()
+            print_banner(title, subtitle=subtitle, breadcrumb=breadcrumb)
+            if header_extra:
+                header_extra()
+                print()
+
+            if n == 0:
+                print(f"  {C.DIM}{t('tui.no_items')}{C.RESET}")
+            elif search_mode:
+                print(f"{C.BOLD}{Icons.SEARCH} {C.RESET}{query}{C.DIM}_{C.RESET}")
+                print()
+                if not filtered:
+                    print(f"  {C.DIM}{t('tui.search_no_matches')}{C.RESET}")
+                for pos, orig_i in enumerate(filtered):
+                    if pos == idx:
+                        print(f"{C.CYAN}{C.BOLD}\033[7m {Icons.POINTER_BOLD}     {labels[orig_i]} {C.RESET}")
+                    else:
+                        print(f"      {labels[orig_i]}")
+            else:
+                for i, label in enumerate(labels):
+                    shortcut = _shortcut_for_index(i)
+                    prefix = f"{shortcut:>2}. " if shortcut else "    "
+                    if i == idx:
+                        print(f"{C.CYAN}{C.BOLD}\033[7m {Icons.POINTER_BOLD} {prefix}{label} {C.RESET}")
+                    else:
+                        print(f"  {prefix}{label}")
+
+            _footer_hint(search_mode=search_mode)
+
+            try:
+                c = getch()
+            except (EOFError, KeyboardInterrupt):
+                raise GoToMainMenu()
+
+            if search_mode:
+                if c in ("\x03", "\x1b", "\x1b\x1b"):
+                    search_mode = False
+                elif c in ("\r", "\n", "\x1b[C", "\x1bOC"):
+                    if filtered:
+                        sys.stdout.write("\033[?25h")
+                        sys.stdout.flush()
+                        return filtered[idx]
+                elif c in ("\x7f", "\x08"):
+                    if query:
+                        query = query[:-1]
+                        filtered = _filter_indices(labels, query)
+                        idx = 0
+                    else:
+                        search_mode = False
+                elif c in ("\x1b[A", "\x1bOA", "\x1b[1;5A", "\x1b[a"):
+                    if filtered:
+                        idx = (idx - 1) % len(filtered)
+                elif c in ("\x1b[B", "\x1bOB", "\x1b[1;5B", "\x1b[b"):
+                    if filtered:
+                        idx = (idx + 1) % len(filtered)
+                elif c in ("\x1b[5~", "\x1b[5;5~"):  # Page Up
+                    if filtered:
+                        idx = max(0, idx - 5)
+                elif c in ("\x1b[6~", "\x1b[6;5~"):  # Page Down
+                    if filtered:
+                        idx = min(len(filtered) - 1, idx + 5)
+                elif c in ("\x1b[H", "\x1b[1~", "\x1b[7~"):  # Home
+                    if filtered:
+                        idx = 0
+                elif c in ("\x1b[F", "\x1b[4~", "\x1b[8~"):  # End
+                    if filtered:
+                        idx = len(filtered) - 1
+                elif len(c) == 1 and c.isprintable():
+                    query += c
+                    filtered = _filter_indices(labels, query)
+                    idx = 0
+                continue
+
+            if n == 0:
+                if c in ("0", "q", "Q", "\x1b", "\x1b[D", "\x1bOD"):
+                    return None
+                if c in ("m", "M", "\x03"):
+                    raise GoToMainMenu()
+                continue
+
+            if c in ("\x1b[A", "\x1bOA", "\x1b[1;5A", "\x1b[a", "k", "K"):
+                idx = (idx - 1) % n
+            elif c in ("\x1b[B", "\x1bOB", "\x1b[1;5B", "\x1b[b", "j", "J"):
+                idx = (idx + 1) % n
+            elif c in ("\x1b[5~", "\x1b[5;5~"):  # Page Up
+                idx = max(0, idx - 5)
+            elif c in ("\x1b[6~", "\x1b[6;5~"):  # Page Down
+                idx = min(n - 1, idx + 5)
+            elif c in ("\x1b[H", "\x1b[1~", "\x1b[7~"):  # Home
+                idx = 0
+            elif c in ("\x1b[F", "\x1b[4~", "\x1b[8~"):  # End
+                idx = n - 1
+            elif c in ("\r", "\n", "\x1b[C", "\x1bOC"):  # Enter or Right Arrow
+                sys.stdout.write("\033[?25h")
+                sys.stdout.flush()
+                return idx
+            elif c in ("0", "q", "Q", "\x1b", "\x1b[D", "\x1bOD"):  # Back / Left Arrow
+                return None
+            elif c in ("m", "M", "\x03"):
+                raise GoToMainMenu()
+            elif c == "/" and searchable:
+                search_mode = True
+                query = ""
+                filtered = list(range(n))
+                idx = 0
+            elif len(c) == 1:
+                target = _shortcut_index_map(n).get(c.lower())
+                if target is not None:
+                    idx = target
+    finally:
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+
+
+def run_menu(title, items, breadcrumb="", subtitle=None, header_extra=None):
     """!
     @brief Render and drive an arrow-key menu until the user backs out of it.
     @param title Banner title.
@@ -181,79 +415,56 @@ def run_menu(title, items, breadcrumb="", subtitle=None, icon="🎮", header_ext
            explicit "back" item (same as pressing 0/Q on it).
     @param breadcrumb Optional breadcrumb line shown under the banner.
     @param subtitle Optional subtitle shown under the banner title.
-    @param icon Emoji shown in the banner.
     @param header_extra Optional zero-arg callable invoked (and printed)
            right after the banner, before the item list.
-    @return Normally, when the user backs out (0/Q, or chose a `None`-callback
-            item). Lets `GoToMainMenu`/`ExitApp`/`SwitchProject` propagate up
-            so the caller's loop decides what to do next.
+    @return `None` when the user backs out (0/Q, or chose a `None`-callback
+            item), or the value passed to a `MenuResult` a callback raised.
+            Lets `GoToMainMenu`/`ExitApp`/`SwitchProject` propagate up so the
+            caller's loop decides what to do next.
     """
-    idx = 0
-    n = len(items)
-    # Hide cursor during menu navigation
-    sys.stdout.write("\033[?25l")
-    sys.stdout.flush()
-    try:
-        while True:
-            clear()
-            print_banner(title, subtitle=subtitle, breadcrumb=breadcrumb, icon=icon)
-            if header_extra:
-                header_extra()
-                print()
-
-            for i, (label, _cb) in enumerate(items):
-                prefix = f"{i + 1:2d}. " if i < 9 else "    "
-                if i == idx:
-                    print(f"{C.BLUE}\033[1m\033[7m> {prefix}{label} {C.RESET}")
-                else:
-                    print(f"  {prefix}{label}")
-
-            _footer_hint()
-
-            try:
-                c = getch()
-            except (EOFError, KeyboardInterrupt):
-                raise GoToMainMenu()
-
-            if c in ("\x1b[A", "k"):
-                idx = (idx - 1) % n
-            elif c in ("\x1b[B", "j"):
-                idx = (idx + 1) % n
-            elif c in ("\r", "\n"):
-                label, cb = items[idx]
-                if cb is None:
-                    return
-                # Show cursor for normal command execution
-                sys.stdout.write("\033[?25h")
-                sys.stdout.flush()
-                clear()
-                print(f"{C.GREEN}{C.BOLD}▶ {label}{C.RESET}\n")
-                try:
-                    cb()
-                except (GoToMainMenu, ExitApp, SwitchProject):
-                    raise
-                except KeyboardInterrupt:
-                    print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
-                except Exception as e:  # noqa: BLE001 -- the menu must never die from an action's error
-                    print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
-                pause()
-                # Re-hide cursor for menu navigation
-                sys.stdout.write("\033[?25l")
-                sys.stdout.flush()
-            elif c in ("0", "q", "Q"):
-                return
-            elif c in ("m", "M"):
-                raise GoToMainMenu()
-            elif c == "\x03":
-                raise GoToMainMenu()
-            elif c.isdigit():
-                v = int(c)
-                if 1 <= v <= min(9, n):
-                    idx = v - 1
-    finally:
-        # Always restore cursor when leaving menu
+    labels = [label for label, _cb in items]
+    while True:
+        idx = _navigate(title, labels, breadcrumb=breadcrumb, subtitle=subtitle, header_extra=header_extra)
+        if idx is None:
+            return None
+        label, cb = items[idx]
+        if cb is None:
+            return None
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()
+        clear()
+        print(f"{C.GREEN}{C.BOLD}{Icons.POINTER_BOLD} {label}{C.RESET}\n")
+        try:
+            cb()
+        except MenuResult as result:
+            return result.value
+        except (GoToMainMenu, ExitApp, SwitchProject):
+            raise
+        except KeyboardInterrupt:
+            print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
+        except Exception as e:  # noqa: BLE001 -- the menu must never die from an action's error
+            print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
+        pause()
+
+
+def select_list(title, entries, label_fn=str, breadcrumb="", subtitle=None, header_extra=None, searchable=True):
+    """!
+    @brief Searchable, letter-shortcut picker: "choose one of these" for
+           VPKs, crash dumps, console profiles, projects, build presets, etc.
+           Shares its rendering/navigation with `run_menu()`.
+    @param entries List of arbitrary items to choose from.
+    @param label_fn Callable turning one entry into its display label
+           (already translated/formatted; may contain ANSI codes).
+    @param header_extra Optional zero-arg callable invoked right after the
+           banner -- use it for an empty-state message when `entries` is empty.
+    @param searchable Whether '/' enters search mode (disable for very short lists).
+    @return The chosen entry, or `None` if the user backed out (0/Q). `M`/Ctrl+C
+            raise `GoToMainMenu`, same as `run_menu()`.
+    """
+    labels = [label_fn(e) for e in entries]
+    idx = _navigate(title, labels, breadcrumb=breadcrumb, subtitle=subtitle,
+                     header_extra=header_extra, searchable=searchable)
+    return entries[idx] if idx is not None else None
 
 
 # ---------------------------------------------------------------------------

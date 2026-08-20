@@ -26,19 +26,19 @@ STRINGS = {
         "pt": "Ferramentas Zenonia 2 (GST/GXL)",
     },
     "zen2.extract_all": {
-        "es": "📦 Extraer todos los assets (.zt1 -> JSON: GST strings y GXL tablas)",
-        "en": "📦 Extract all assets (.zt1 -> JSON: GST strings & GXL tables)",
-        "pt": "📦 Extrair todos os assets (.zt1 -> JSON: GST strings e tabelas GXL)",
+        "es": "Extraer todos los assets (.zt1 -> JSON: GST strings y GXL tablas)",
+        "en": "Extract all assets (.zt1 -> JSON: GST strings & GXL tables)",
+        "pt": "Extrair todos os assets (.zt1 -> JSON: GST strings e tabelas GXL)",
     },
     "zen2.translate_json": {
-        "es": "🌐 Traducir strings JSON (deep-translator EN -> ES)",
-        "en": "🌐 Translate JSON strings (deep-translator EN -> ES)",
-        "pt": "🌐 Traduzir strings JSON (deep-translator EN -> ES)",
+        "es": "Traducir strings JSON (deep-translator EN -> ES)",
+        "en": "Translate JSON strings (deep-translator EN -> ES)",
+        "pt": "Traduzir strings JSON (deep-translator EN -> ES)",
     },
     "zen2.pack_all": {
-        "es": "⚙️  Empaquetar traducción completa (JSON SPA -> data/eng/ *.zt1)",
-        "en": "⚙️  Pack full translation (JSON SPA -> data/eng/ *.zt1)",
-        "pt": "⚙️  Empacotar tradução completa (JSON SPA -> data/eng/ *.zt1)",
+        "es": "Empaquetar traducción completa (JSON SPA -> data/eng/ *.zt1)",
+        "en": "Pack full translation (JSON SPA -> data/eng/ *.zt1)",
+        "pt": "Empacotar tradução completa (JSON SPA -> data/eng/ *.zt1)",
     },
 }
 i18n.register(STRINGS)
@@ -419,5 +419,4 @@ def zenonia2_menu(project_cfg):
         t("zen2.menu_title"),
         items,
         breadcrumb=f"{project_cfg['game_name']} › {t('zen2.menu_title')}",
-        icon="⚔️",
     )

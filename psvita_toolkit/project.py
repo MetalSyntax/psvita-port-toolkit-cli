@@ -7,34 +7,20 @@ Entry screen of the toolkit: continue with an existing port (auto-detected under
 `BASE_DIR`, picked from the recents list, or given as a manual path), or create a
 new one from scratch (delegates to `init_port.py`).
 
-See `docs/dev-notes/project.md` for the rationale behind the adoption flow and the
-main menu loop's `result_holder` closure trick.
+See `docs/dev-notes/project.md` for the rationale behind the adoption flow and
+the main menu's use of `tui.MenuResult`.
 """
 
 from pathlib import Path
 
 from . import config as cfgmod
+from . import doctor
 from . import tui
 from .tui import C
 from . import i18n
 from .i18n import t
 
 STRINGS = {
-    "project.col_name": {
-        "es": "Nombre",
-        "en": "Name",
-        "pt": "Nome",
-    },
-    "project.col_status": {
-        "es": "Estado",
-        "en": "Status",
-        "pt": "Estado",
-    },
-    "project.col_path": {
-        "es": "Ruta",
-        "en": "Path",
-        "pt": "Caminho",
-    },
     "project.status_adopted": {
         "es": "adoptado",
         "en": "adopted",
@@ -115,50 +101,45 @@ STRINGS = {
         "en": "Enter a path manually",
         "pt": "Digitar um caminho manualmente",
     },
-    "project.back_option": {
-        "es": "Volver",
-        "en": "Back",
-        "pt": "Voltar",
-    },
-    "project.choose_project_prompt": {
-        "es": "Elegí un proyecto [1-{n}], R, o 0: ",
-        "en": "Choose a project [1-{n}], R, or 0: ",
-        "pt": "Escolha um projeto [1-{n}], R, ou 0: ",
-    },
     "project.manual_path_prompt": {
         "es": "Ruta absoluta a la carpeta del port:",
         "en": "Absolute path to the port folder:",
         "pt": "Caminho absoluto para a pasta do port:",
     },
-    "project.invalid_option": {
-        "es": "Opción inválida.",
-        "en": "Invalid option.",
-        "pt": "Opção inválida.",
+    "project.continue_current": {
+        "es": "Continuar con el port actual:",
+        "en": "Continue with current port:",
+        "pt": "Continuar com o port atual:",
     },
     "project.continue_last": {
-        "es": "▶️  Continuar con el último port: ",
-        "en": "▶️  Continue with the last port: ",
-        "pt": "▶️  Continuar com o último port: ",
+        "es": "Continuar con el último port:",
+        "en": "Continue with the last port:",
+        "pt": "Continuar com o último port:",
     },
     "project.menu_continue_other": {
-        "es": "📂 Continuar con otro port existente (elegir de la lista / ruta manual)",
-        "en": "📂 Continue with another existing port (pick from list / manual path)",
-        "pt": "📂 Continuar com outro port existente (escolher da lista / caminho manual)",
+        "es": "Continuar con otro port existente (elegir de la lista / ruta manual)",
+        "en": "Continue with another existing port (pick from list / manual path)",
+        "pt": "Continuar com outro port existente (escolher da lista / caminho manual)",
     },
     "project.menu_create_new": {
-        "es": "🆕 Crear un port NUEVO desde cero (APK Android -> PS Vita)",
-        "en": "🆕 Create a NEW port from scratch (Android APK -> PS Vita)",
-        "pt": "🆕 Criar um port NOVO do zero (APK Android -> PS Vita)",
+        "es": "Crear un port NUEVO desde cero (APK Android -> PS Vita)",
+        "en": "Create a NEW port from scratch (Android APK -> PS Vita)",
+        "pt": "Criar um port NOVO do zero (APK Android -> PS Vita)",
     },
     "project.menu_global_config": {
-        "es": "⚙️  Configuración global (rutas de BASE_DIR, VITASDK, etc.)",
-        "en": "⚙️  Global settings (BASE_DIR, VITASDK paths, etc.)",
-        "pt": "⚙️  Configuração global (caminhos de BASE_DIR, VITASDK, etc.)",
+        "es": "Configuración global (rutas de BASE_DIR, VITASDK, etc.)",
+        "en": "Global settings (BASE_DIR, VITASDK paths, etc.)",
+        "pt": "Configuração global (caminhos de BASE_DIR, VITASDK, etc.)",
+    },
+    "project.menu_doctor": {
+        "es": "Doctor -- chequear el entorno (VITASDK, Docker, jadx, CMake...)",
+        "en": "Doctor -- check the environment (VITASDK, Docker, jadx, CMake...)",
+        "pt": "Doctor -- verificar o ambiente (VITASDK, Docker, jadx, CMake...)",
     },
     "project.menu_exit": {
-        "es": "❌ Salir",
-        "en": "❌ Exit",
-        "pt": "❌ Sair",
+        "es": "Salir",
+        "en": "Exit",
+        "pt": "Sair",
     },
     "project.main_menu_title": {
         "es": "PS VITA PORT TOOLKIT",
@@ -180,11 +161,6 @@ STRINGS = {
         "en": "Base: {path}",
         "pt": "Base: {path}",
     },
-    "project.footer_hint_short": {
-        "es": "↑/↓ mover · Enter elegir · Ctrl+C salir",
-        "en": "↑/↓ move · Enter select · Ctrl+C exit",
-        "pt": "↑/↓ mover · Enter selecionar · Ctrl+C sair",
-    },
     "project.global_config_banner_title": {
         "es": "Configuración global",
         "en": "Global settings",
@@ -204,19 +180,6 @@ STRINGS = {
 i18n.register(STRINGS)
 
 
-def _print_project_table(projects):
-    """!
-    @brief Print the numbered table of detected projects (name, status, path).
-    @param projects List of dicts as returned by `cfgmod.discover_projects()`.
-    """
-    print(f"  {C.BOLD}{'#':<4}{t('project.col_name'):<28}{t('project.col_status'):<14}{t('project.col_path')}{C.RESET}")
-    print(f"  {'-' * 4}{'-' * 28}{'-' * 14}{'-' * 30}")
-    for i, p in enumerate(projects, 1):
-        estado = f"{C.GREEN}{t('project.status_adopted')}{C.RESET}" if p["adopted"] else f"{C.YELLOW}{t('project.status_no_config')}{C.RESET}"
-        nombre = p["game_name"] or p["name"]
-        print(f"  {i:<4}{nombre:<28}{estado:<23}{C.DIM}{p['path']}{C.RESET}")
-
-
 def _adopt_project(project_dir):
     """!
     @brief Interactive wizard to adopt a port that has no `.psvita-toolkit.json` yet.
@@ -229,8 +192,7 @@ def _adopt_project(project_dir):
     guess = cfgmod.autodetect_legacy_fields(project_dir)
 
     tui.clear()
-    tui.print_banner(t("project.adopt_banner_title"), icon="📂",
-                      subtitle=str(project_dir))
+    tui.print_banner(t("project.adopt_banner_title"), subtitle=str(project_dir))
     print(f"{C.DIM}{t('project.adopt_detected_note')}{C.RESET}")
     print(f"{C.DIM}{t('project.adopt_confirm_note')}{C.RESET}\n")
 
@@ -260,6 +222,18 @@ def _adopt_project(project_dir):
     return project_cfg
 
 
+_MANUAL_PATH_ENTRY = {"_manual_path": True}
+
+
+def _project_entry_label(p):
+    if p.get("_manual_path"):
+        return f"{C.CYAN}{t('project.enter_path_manually')}{C.RESET}"
+    status = (f"{C.GREEN}{t('project.status_adopted')}{C.RESET}" if p["adopted"]
+              else f"{C.YELLOW}{t('project.status_no_config')}{C.RESET}")
+    name = p["game_name"] or p["name"]
+    return f"{C.BOLD}{name}{C.RESET}  {C.DIM}[{C.RESET}{status}{C.DIM}] {p['path']}{C.RESET}"
+
+
 def _select_from_list(global_cfg):
     """!
     @brief List detected ports under `global_cfg`'s `base_dir` and let the user pick
@@ -271,34 +245,22 @@ def _select_from_list(global_cfg):
     base_dir = global_cfg.get("base_dir", "")
     exclude = [global_cfg.get("boilerplate_dir", "")]
     projects = cfgmod.discover_projects(base_dir, exclude_dirs=exclude) if base_dir else []
+    entries = list(projects) + [_MANUAL_PATH_ENTRY]
 
-    while True:
-        tui.clear()
-        tui.print_banner(t("project.select_existing_banner_title"), icon="📂",
-                          subtitle=base_dir)
+    def header():
         if not projects:
-            print(f"{C.YELLOW}{t('project.no_ports_detected', base_dir=base_dir)}{C.RESET}\n")
-        else:
-            _print_project_table(projects)
-            print()
+            print(f"{C.YELLOW}{t('project.no_ports_detected', base_dir=base_dir)}{C.RESET}")
 
-        print(f"  {C.GREEN}[R]{C.RESET} {t('project.enter_path_manually')}")
-        print(f"  {C.RED}[0]{C.RESET} {t('project.back_option')}")
-        choice = input(f"\n{C.BOLD}{t('project.choose_project_prompt', n=len(projects))}{C.RESET}").strip().lower()
-
-        if choice in ("0", "q", ""):
-            return None
-        if choice == "r":
-            manual = tui.input_path(t("project.manual_path_prompt"), must_exist=True, is_dir=True)
-            return _open_project(manual)
-        try:
-            idx = int(choice)
-            if 1 <= idx <= len(projects):
-                return _open_project(projects[idx - 1]["path"])
-        except ValueError:
-            pass
-        print(f"{C.RED}{t('project.invalid_option')}{C.RESET}")
-        tui.pause()
+    chosen = tui.select_list(
+        t("project.select_existing_banner_title"), entries, label_fn=_project_entry_label,
+        subtitle=base_dir, header_extra=header,
+    )
+    if chosen is None:
+        return None
+    if chosen.get("_manual_path"):
+        manual = tui.input_path(t("project.manual_path_prompt"), must_exist=True, is_dir=True)
+        return _open_project(manual)
+    return _open_project(chosen["path"])
 
 
 def _open_project(project_dir):
@@ -316,82 +278,62 @@ def select_or_create_project(global_cfg):
     @param global_cfg Global config dict.
     @return Ready-to-use per-project config dict (with `_project_dir` set),
             or `None` if the user chose to exit.
+    @note "Continue last/other" and "create new" raise `tui.MenuResult` so
+          `run_menu()` hands the chosen project straight back here without an
+          Enter-to-continue prompt; "global settings"/"doctor" are plain
+          callbacks, so `run_menu()` just redraws this same menu after them.
     """
     from . import init_port  # deferred import: avoids a cycle, init_port isn't needed unless creating a new port
 
-    last = global_cfg.get("last_project")
-    recent_valid = last and Path(last).is_dir()
-
     def continuar_ultimo():
-        return _open_project(last)
+        raise tui.MenuResult(_open_project(global_cfg.get("last_project")))
 
     def continuar_lista():
-        return _select_from_list(global_cfg)
+        raise tui.MenuResult(_select_from_list(global_cfg))
 
     def crear_nuevo():
-        return init_port.run_wizard(global_cfg)
+        raise tui.MenuResult(init_port.run_wizard(global_cfg))
 
-    while True:
-        global_cfg.update(cfgmod.load_global_config())
-        last = global_cfg.get("last_project")
-        recent_valid = last and Path(last).is_dir()
-        result_holder = {}
+    global_cfg.update(cfgmod.load_global_config())
+    last = global_cfg.get("last_project")
 
-        def wrap_action(fn):
-            def inner():
-                result_holder["value"] = fn()
-            return inner
+    items = []
+    cwd = Path.cwd().resolve()
+    current_has_config = (cwd / cfgmod.PROJECT_CONFIG_FILENAME).is_file()
 
-        items = []
-        if recent_valid:
-            items.append((f"{t('project.continue_last')}{C.BOLD}{Path(last).name}{C.RESET}", wrap_action(continuar_ultimo)))
-        items.append((t("project.menu_continue_other"), wrap_action(continuar_lista)))
-        items.append((t("project.menu_create_new"), wrap_action(crear_nuevo)))
-        items.append((t("project.menu_global_config"), wrap_action(lambda: _edit_global_config(global_cfg))))
-        items.append((f"{C.RED}{t('project.menu_exit')}{C.RESET}", None))
+    if current_has_config:
+        current_cfg = cfgmod.load_project_config(cwd)
+        current_name = (current_cfg.get("game_name") if current_cfg else None) or cwd.name
+        def continuar_actual():
+            raise tui.MenuResult(_open_project(cwd))
+        items.append((f"{t('project.continue_current')} {C.BOLD}{current_name}{C.RESET}", continuar_actual))
 
-        idx = 0
-        n = len(items)
-        while True:
-            tui.clear()
-            tui.print_banner(t("project.main_menu_title"), subtitle=t("project.main_menu_subtitle"), icon="🎮")
-            print(f"{C.DIM}{t('project.base_prefix', path=global_cfg.get('base_dir') or t('project.base_not_configured'))}{C.RESET}\n")
-            for i, (label, _cb) in enumerate(items):
-                prefix = f"{i + 1:2d}. " if i < 9 else "    "
-                if i == idx:
-                    print(f"{C.BLUE}{C.BOLD}\033[7m> {prefix}{label}{C.RESET}")
-                else:
-                    print(f"  {prefix}{label}")
-            print(f"\n{C.DIM}{t('project.footer_hint_short')}{C.RESET}")
+    if last and Path(last).is_dir():
+        last_dir = Path(last).resolve()
+        if not current_has_config or last_dir != cwd:
+            last_cfg = cfgmod.load_project_config(last_dir)
+            last_name = (last_cfg.get("game_name") if last_cfg else None) or last_dir.name
+            items.append((f"{t('project.continue_last')} {C.BOLD}{last_name}{C.RESET}", continuar_ultimo))
 
-            try:
-                c = tui.getch()
-            except (EOFError, KeyboardInterrupt):
-                return None
+    items.append((t("project.menu_continue_other"), continuar_lista))
+    items.append((t("project.menu_create_new"), crear_nuevo))
+    items.append((t("project.menu_global_config"), lambda: _edit_global_config(global_cfg)))
+    items.append((t("project.menu_doctor"), lambda: doctor.doctor_menu(global_cfg)))
+    items.append((f"{C.RED}{t('project.menu_exit')}{C.RESET}", None))
 
-            if c == "\x1b[A":
-                idx = (idx - 1) % n
-            elif c == "\x1b[B":
-                idx = (idx + 1) % n
-            elif c in ("\r", "\n"):
-                label, cb = items[idx]
-                if cb is None:
-                    return None
-                cb()
-                if result_holder.get("value"):
-                    return result_holder["value"]
-                break  # redraw the project-selection menu
-            elif c == "\x03":
-                return None
-            elif c.isdigit():
-                v = int(c)
-                if 1 <= v <= min(9, n):
-                    idx = v - 1
+    def header():
+        base = global_cfg.get("base_dir") or t("project.base_not_configured")
+        print(f"{C.DIM}{t('project.base_prefix', path=base)}{C.RESET}")
+
+    return tui.run_menu(
+        t("project.main_menu_title"), items,
+        subtitle=t("project.main_menu_subtitle"), header_extra=header,
+    )
 
 
 def _edit_global_config(global_cfg):
     tui.clear()
-    tui.print_banner(t("project.global_config_banner_title"), icon="⚙️")
+    tui.print_banner(t("project.global_config_banner_title"))
 
     current_lang = i18n.get_language()
     if tui.confirm(t("project.change_language_confirm", name=i18n.LANGUAGE_NAMES[current_lang]), default=False):

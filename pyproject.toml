@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psvita-toolkit"
+version = "1.0.0"
+description = "PS Vita Port Toolkit CLI/TUI"
+requires-python = ">=3.9"
+dependencies = [
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+psvita-toolkit = "psvita_toolkit.__main__:run"
+
+[tool.setuptools]
+packages = ["psvita_toolkit"]
