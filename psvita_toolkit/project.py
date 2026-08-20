@@ -13,6 +13,7 @@ the main menu's use of `tui.MenuResult`.
 
 from pathlib import Path
 
+from . import catalog
 from . import config as cfgmod
 from . import doctor
 from . import tui
@@ -135,6 +136,11 @@ STRINGS = {
         "es": "Doctor -- chequear el entorno (VITASDK, Docker, jadx, CMake...)",
         "en": "Doctor -- check the environment (VITASDK, Docker, jadx, CMake...)",
         "pt": "Doctor -- verificar o ambiente (VITASDK, Docker, jadx, CMake...)",
+    },
+    "project.menu_catalog": {
+        "es": "Catálogo de Herramientas -- qué hace cada una",
+        "en": "Tool Catalog -- what each one does",
+        "pt": "Catálogo de Ferramentas -- o que cada uma faz",
     },
     "project.menu_exit": {
         "es": "Salir",
@@ -319,6 +325,7 @@ def select_or_create_project(global_cfg):
     items.append((t("project.menu_create_new"), crear_nuevo))
     items.append((t("project.menu_global_config"), lambda: _edit_global_config(global_cfg)))
     items.append((t("project.menu_doctor"), lambda: doctor.doctor_menu(global_cfg)))
+    items.append((t("project.menu_catalog"), catalog.print_catalog))
     items.append((f"{C.RED}{t('project.menu_exit')}{C.RESET}", None))
 
     def header():

@@ -87,6 +87,9 @@ def build_parser():
     p_doctor = sub.add_parser("doctor", help="Check host dependencies (VITASDK, Docker, jadx, CMake/Ninja, Python packages).")
     p_doctor.add_argument("--plain", action="store_true", help="Disable ANSI colors (for log files/CI).")
 
+    p_tools = sub.add_parser("tools", help="Print the catalog of every tool this toolkit has and what it does.")
+    p_tools.add_argument("--plain", action="store_true", help="Disable ANSI colors (for log files/CI).")
+
     p_build = sub.add_parser("build", help="Build the project (build.sh, or direct CMake if it has none).")
     p_build.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_build.add_argument("--preset", default="debug",
@@ -248,6 +251,18 @@ def _cmd_doctor(args):
     cfg = cfgmod.load_global_config()
     i18n.set_language(cfg.get("language", i18n.DEFAULT_LANGUAGE))
     return doctor.run_doctor(cfg, use_color=not args.plain)
+
+
+def _cmd_tools(args):
+    """!
+    @brief `tools` subcommand handler: print the full tool catalog.
+    @param args Parsed CLI args (`plain`).
+    @return `0` (always succeeds).
+    """
+    from . import catalog
+    cfg = cfgmod.load_global_config()
+    i18n.set_language(cfg.get("language", i18n.DEFAULT_LANGUAGE))
+    return catalog.print_catalog(use_color=not args.plain)
 
 
 def _cmd_build(args):
@@ -753,6 +768,7 @@ def _cmd_shader_live_reload(args):
 
 _HANDLERS = {
     "doctor": _cmd_doctor,
+    "tools": _cmd_tools,
     "build": _cmd_build,
     "deploy": _cmd_deploy,
     "analyze": _cmd_analyze,

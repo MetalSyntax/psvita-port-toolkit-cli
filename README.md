@@ -62,6 +62,10 @@ Después de eso, cada vez que abrís el toolkit elegís:
    deja `PORTING_PLAN.md`/`port_progress.md`/`CLAUDE.md` escritos.
 4. **Configuración global** -- para corregir cualquiera de esas rutas después.
 
+Ese mismo menú también tiene **Doctor** (chequeo del entorno) y **Catálogo de Herramientas**
+(qué hace cada una de las 27 herramientas del toolkit, en tu idioma -- también accesible con
+`psvita-toolkit tools` sin abrir el TUI).
+
 ## Menú principal (por proyecto)
 
 Una vez dentro de un proyecto, todo es un menú de flechas navegable:
@@ -134,6 +138,7 @@ psvita_toolkit/
   crash_analyzer.py   # analizador de .psp2dmp (vita-parse-core)
   utils.py            # limpieza, re-decompilación, tests, símbolos, docs
   gen_docs.py         # generación de skeletons Doxygen y docs/api/ markdown
+  catalog.py          # catálogo de las 27 herramientas (TUI/CLI/dashboard), qué hace cada una
   doctor.py           # diagnóstico del entorno (VITASDK, Docker, jadx, CMake/Ninja, paquetes Python)
   cli.py              # modo headless: `psvita-toolkit <subcomando> ...` sin abrir la TUI
   so_patcher.py       # detección + stubs de neutralización de SDKs de telemetría/IAP
@@ -158,6 +163,7 @@ directo desde la terminal, un editor, un alias, o un pipeline de CI -- sin abrir
 
 ```bash
 psvita-toolkit doctor                                            # chequear el entorno
+psvita-toolkit tools                                              # catálogo: qué hace cada herramienta
 psvita-toolkit build --project <ruta> --preset debug              # compilar
 psvita-toolkit deploy --project <ruta> --eboot --yes               # subir solo eboot.bin
 psvita-toolkit deploy --project <ruta> --vpk                        # subir el VPK más nuevo

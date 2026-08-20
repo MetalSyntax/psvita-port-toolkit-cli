@@ -19,6 +19,7 @@ from pathlib import Path
 from . import asset_transcoder
 from . import auto_synth
 from . import build_deploy
+from . import catalog
 from . import config as cfgmod
 from . import context_feeder
 from . import crash_analyzer
@@ -175,6 +176,11 @@ STRINGS = {
         "es": "Doctor -- chequear el entorno (VITASDK, Docker, jadx, CMake...)",
         "en": "Doctor -- check the environment (VITASDK, Docker, jadx, CMake...)",
         "pt": "Doctor -- verificar o ambiente (VITASDK, Docker, jadx, CMake...)",
+    },
+    "main.utils.catalog": {
+        "es": "Catálogo de Herramientas -- qué hace cada una",
+        "en": "Tool Catalog -- what each one does",
+        "pt": "Catálogo de Ferramentas -- o que cada uma faz",
     },
     "main.utils.detect_middleware": {
         "es": "Detectar middleware conocido en el .so (FMOD, OpenAL, Box2D...)",
@@ -405,6 +411,7 @@ def _utils_submenu(project_cfg, global_cfg):
 
     items = [
         (t("main.utils.doctor"), lambda: doctor.run_doctor(global_cfg)),
+        (t("main.utils.catalog"), catalog.print_catalog),
         (t("main.utils.so_patcher"), lambda: so_patcher.patch_menu(project_cfg, global_cfg)),
         (t("main.utils.align_check"), lambda: mem_align_analyzer.alignment_menu(project_cfg, global_cfg)),
         (t("main.utils.gdb_bridge"), lambda: gdb_bridge.gdb_bridge_menu(project_cfg, global_cfg)),
