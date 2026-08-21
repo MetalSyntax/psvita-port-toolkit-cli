@@ -93,14 +93,19 @@ STRINGS = {
         "pt": "[*] Extraindo {apk} para {dirname}/ ...",
     },
     "utils.ux0data_no_source_dirs": {
-        "es": "{color_yellow}[!] {extract_dir} no tiene assets/ ni res/ -- nada para replicar.{color_reset}",
-        "en": "{color_yellow}[!] {extract_dir} has no assets/ or res/ -- nothing to replicate.{color_reset}",
-        "pt": "{color_yellow}[!] {extract_dir} não tem assets/ nem res/ -- nada para replicar.{color_reset}",
+        "es": "{color_yellow}[!] {extract_dir} no tiene assets/, res/ ni lib/ -- nada para replicar.{color_reset}",
+        "en": "{color_yellow}[!] {extract_dir} has no assets/, res/, or lib/ -- nothing to replicate.{color_reset}",
+        "pt": "{color_yellow}[!] {extract_dir} não tem assets/, res/ nem lib/ -- nada para replicar.{color_reset}",
     },
     "utils.ux0data_copying": {
         "es": "[*] Copiando {src} -> {dst}",
         "en": "[*] Copying {src} -> {dst}",
         "pt": "[*] Copiando {src} -> {dst}",
+    },
+    "utils.ux0data_copying_libs": {
+        "es": "[*] Copiando .so nativo(s) de lib/{abi}/ -> {dest}",
+        "en": "[*] Copying native .so(s) from lib/{abi}/ -> {dest}",
+        "pt": "[*] Copiando .so nativo(s) de lib/{abi}/ -> {dest}",
     },
     "utils.ux0data_dir_done": {
         "es": "{color_green}[+] {count} archivo(s) ({size_mb} MB) replicados en {dest}{color_reset}",
@@ -108,9 +113,9 @@ STRINGS = {
         "pt": "{color_green}[+] {count} arquivo(s) ({size_mb} MB) replicados em {dest}{color_reset}",
     },
     "utils.ux0data_next_step": {
-        "es": "{color_dim}    Esta es la estructura local que se sube a ux0:data/{slug}/ en la consola\n    (mismo DATA_PATH que CMakeLists.txt). Subila por FTP/VitaShell y comparala\n    después con 'Verificar assets de datos' en Utilidades.{color_reset}",
-        "en": "{color_dim}    This is the local structure uploaded to ux0:data/{slug}/ on the console\n    (same DATA_PATH as CMakeLists.txt). Upload it via FTP/VitaShell and compare\n    it afterward with 'Verify data assets' in Utilities.{color_reset}",
-        "pt": "{color_dim}    Esta é a estrutura local enviada para ux0:data/{slug}/ no console\n    (mesmo DATA_PATH do CMakeLists.txt). Envie-a via FTP/VitaShell e compare\n    depois com 'Verificar assets de dados' em Utilidades.{color_reset}",
+        "es": "{color_dim}    Esta es la estructura local que se sube a ux0:data/{slug}/ en la consola\n    (mismo DATA_PATH que CMakeLists.txt). Subila con 'Subir ux0_data/<slug> a la consola\n    (FTP)' en el menú principal (o por VitaShell) y comparala después con\n    'Verificar assets de datos' en Utilidades.{color_reset}",
+        "en": "{color_dim}    This is the local structure uploaded to ux0:data/{slug}/ on the console\n    (same DATA_PATH as CMakeLists.txt). Upload it with 'Upload ux0_data/<slug> to\n    the console (FTP)' in the main menu (or via VitaShell) and compare it\n    afterward with 'Verify data assets' in Utilities.{color_reset}",
+        "pt": "{color_dim}    Esta é a estrutura local enviada para ux0:data/{slug}/ no console\n    (mesmo DATA_PATH do CMakeLists.txt). Envie-a com 'Enviar ux0_data/<slug> para\n    o console (FTP)' no menu principal (ou via VitaShell) e compare depois com\n    'Verificar assets de dados' em Utilidades.{color_reset}",
     },
     "utils.tests_no_script": {
         "es": "{color_yellow}[-] Este proyecto no tiene tests/run_tests.sh.{color_reset}",
@@ -419,12 +424,44 @@ def _copytree_clean(src, dst):
     return file_count, total_bytes
 
 
+def _copy_native_libs(extract_dir, dest_root):
+    """!
+    @brief Copy the preferred-ABI native `.so`(s) from the extracted APK's
+           `lib/<abi>/` flat into `dest_root`, matching the layout every
+           sibling port under BASE_DIR already uses (e.g.
+           `ux0_data/<slug>/libgame.so`, not a nested `lib/` subfolder).
+    @param extract_dir Extracted APK directory (has a `lib/<abi>/` subtree).
+    @param dest_root Destination `ux0_data/<slug>/` directory.
+    @return Tuple `(file_count, total_bytes, abi)` copied; `abi` is `None`
+            if `lib/` doesn't exist or has no ABI subfolders.
+    @note Same "prefer armeabi-v7a" selection as `init_port.py`'s ABI/`.so`
+          detection -- the Vita's Cortex-A9 runs ARMv7 natively.
+    """
+    lib_dir = Path(extract_dir) / "lib"
+    if not lib_dir.is_dir():
+        return 0, 0, None
+    abis = sorted(d.name for d in lib_dir.iterdir() if d.is_dir())
+    if not abis:
+        return 0, 0, None
+    preferred_abi = "armeabi-v7a" if "armeabi-v7a" in abis else abis[0]
+
+    file_count = 0
+    total_bytes = 0
+    for so_file in sorted((lib_dir / preferred_abi).glob("*.so")):
+        target = Path(dest_root) / so_file.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(so_file, target)
+        file_count += 1
+        total_bytes += target.stat().st_size
+    return file_count, total_bytes, preferred_abi
+
+
 def scaffold_ux0_data(project_cfg):
     """!
     @brief Replicate `<project_dir>/ux0_data/<slug>/`, the local staging folder
            mirroring `ux0:data/<slug>/` on the console, from the extracted
-           APK's `assets/`/`res/` -- the same layout every sibling port under
-           BASE_DIR already has.
+           APK's `assets/`/`res/`/`lib/` -- the same layout every sibling port
+           under BASE_DIR already has.
     @param project_cfg Per-project config dict (`slug`, `apk_basename`).
     @note Reuses `<slug>_extract/` (or the legacy `apk_extract/`) if present;
           otherwise extracts the project's `.apk` on the fly, same convention
@@ -458,11 +495,13 @@ def scaffold_ux0_data(project_cfg):
         subprocess.run(["unzip", "-qq", "-o", str(apk_file), "-d", str(extract_dir)])
 
     source_names = [name for name in ("assets", "res") if (extract_dir / name).is_dir()]
-    if not source_names:
+    has_libs = (extract_dir / "lib").is_dir()
+    if not source_names and not has_libs:
         print(t("utils.ux0data_no_source_dirs", color_yellow=C.YELLOW, extract_dir=extract_dir, color_reset=C.RESET))
         return
 
     dest_root = project_dir / "ux0_data" / slug
+    dest_root.mkdir(parents=True, exist_ok=True)
     total_files = 0
     total_bytes = 0
     for name in source_names:
@@ -472,6 +511,13 @@ def scaffold_ux0_data(project_cfg):
         count, size = _copytree_clean(src, dst)
         total_files += count
         total_bytes += size
+
+    if has_libs:
+        count, size, abi = _copy_native_libs(extract_dir, dest_root)
+        if count:
+            print(t("utils.ux0data_copying_libs", abi=abi, dest=dest_root))
+            total_files += count
+            total_bytes += size
 
     for runtime_dir in ("saves", "logs"):
         (dest_root / runtime_dir).mkdir(parents=True, exist_ok=True)

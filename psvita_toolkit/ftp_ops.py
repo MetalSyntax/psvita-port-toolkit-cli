@@ -224,6 +224,31 @@ STRINGS = {
         "en": "[-] VPK transfer failed: {error}",
         "pt": "[-] Falha na transferência do VPK: {error}",
     },
+    "ftp_ops.ux0data_dir_not_found": {
+        "es": "[-] No existe {path} -- generala primero con 'Replicar estructura local de ux0:data/<slug>/' en Utilidades.",
+        "en": "[-] {path} doesn't exist -- generate it first with 'Replicate local ux0:data/<slug>/ structure' in Utilities.",
+        "pt": "[-] {path} não existe -- gere-a primeiro com 'Replicar estrutura local de ux0:data/<slug>/' em Utilitários.",
+    },
+    "ftp_ops.ux0data_dir_empty": {
+        "es": "[-] {path} está vacía -- no hay nada para subir.",
+        "en": "[-] {path} is empty -- nothing to upload.",
+        "pt": "[-] {path} está vazia -- não há nada para enviar.",
+    },
+    "ftp_ops.confirm_upload_ux0data": {
+        "es": "¿Subir {count} archivo(s) ({size_mb} MB) de ux0_data/ a {dest} en la consola?",
+        "en": "Upload {count} file(s) ({size_mb} MB) from ux0_data/ to {dest} on the console?",
+        "pt": "Enviar {count} arquivo(s) ({size_mb} MB) de ux0_data/ para {dest} no console?",
+    },
+    "ftp_ops.ux0data_upload_success": {
+        "es": "[+] {count} archivo(s) subidos a {dest}",
+        "en": "[+] {count} file(s) uploaded to {dest}",
+        "pt": "[+] {count} arquivo(s) enviados para {dest}",
+    },
+    "ftp_ops.ux0data_upload_failed": {
+        "es": "[-] Falló la subida de ux0_data/: {error}",
+        "en": "[-] ux0_data/ upload failed: {error}",
+        "pt": "[-] Falha no envio de ux0_data/: {error}",
+    },
     "ftp_ops.eboot_not_found": {
         "es": "[-] No se encontró '{path}'. Compilá el proyecto primero.",
         "en": "[-] '{path}' not found. Build the project first.",
@@ -862,6 +887,83 @@ def upload_eboot(project_cfg, global_cfg, assume_yes=False):
         print(f"{C.GREEN}{t('ftp_ops.eboot_upload_success')}{C.RESET}")
     except all_errors as e:
         print(f"{C.RED}{t('ftp_ops.transfer_failed', error=e)}{C.RESET}")
+    finally:
+        _quit(ftp)
+
+
+def _iter_upload_files(local_dir):
+    """!
+    @brief Walk `local_dir` and yield every file to upload, skipping macOS junk.
+    @param local_dir Local directory to walk.
+    @return Generator of `(local_path, relative_posix_path)` tuples, sorted
+            for a deterministic upload order.
+    """
+    for item in sorted(Path(local_dir).rglob("*")):
+        if item.is_dir():
+            continue
+        if item.name.startswith("._") or item.name == ".DS_Store":
+            continue
+        yield item, item.relative_to(local_dir).as_posix()
+
+
+def upload_ux0_data_dir(project_cfg, global_cfg, non_interactive=False):
+    """!
+    @brief Upload the whole local `<project_dir>/ux0_data/<slug>/` staging
+           folder -- produced by `utils.scaffold_ux0_data()` -- to
+           `ux0:data/<slug>/` on the console, recreating its subfolder
+           structure and showing a per-file progress bar. The directory
+           counterpart to `upload_vpk()`.
+    @param project_cfg Active project config dict (`slug`, `vita_game_data_dir`).
+    @param global_cfg Global config dict (VPN bypass, etc).
+    @param non_interactive Skip the confirmation prompt -- for headless use.
+    """
+    project_dir = Path(project_cfg["_project_dir"])
+    slug = project_cfg["slug"]
+    local_dir = project_dir / "ux0_data" / slug
+    if not local_dir.is_dir():
+        print(f"{C.RED}{t('ftp_ops.ux0data_dir_not_found', path=local_dir)}{C.RESET}")
+        return
+
+    files = list(_iter_upload_files(local_dir))
+    if not files:
+        print(f"{C.YELLOW}{t('ftp_ops.ux0data_dir_empty', path=local_dir)}{C.RESET}")
+        return
+
+    total_bytes = sum(p.stat().st_size for p, _ in files)
+    vita_game_dir = project_cfg.get("vita_game_data_dir") or f"/ux0:/data/{slug}"
+    if not non_interactive and not tui.confirm(
+        t("ftp_ops.confirm_upload_ux0data", count=len(files),
+          size_mb=f"{total_bytes / (1024 * 1024):.1f}", dest=vita_game_dir)
+    ):
+        print(t("ftp_ops.cancelled"))
+        return
+
+    ftp = _connect_with_retry(project_cfg, global_cfg)
+    if not ftp:
+        return
+    try:
+        create_dir_if_missing(ftp, vita_game_dir)
+        made_dirs = {""}
+        for index, (local_path, rel_path) in enumerate(files, start=1):
+            rel_dir = "/".join(rel_path.split("/")[:-1])
+            if rel_dir and rel_dir not in made_dirs:
+                current = ""
+                for part in rel_dir.split("/"):
+                    current = f"{current}/{part}" if current else part
+                    if current not in made_dirs:
+                        try:
+                            ftp.mkd(f"{vita_game_dir}/{current}")
+                        except all_errors:
+                            pass
+                        made_dirs.add(current)
+            dest = f"{vita_game_dir}/{rel_path}"
+            label = f"[{index}/{len(files)}] {rel_path}"
+            with open(local_path, "rb") as f:
+                ftp.storbinary(f"STOR {dest}", f,
+                                callback=_progress_callback(local_path.stat().st_size, label=label))
+        print(f"{C.GREEN}{t('ftp_ops.ux0data_upload_success', count=len(files), dest=vita_game_dir)}{C.RESET}")
+    except all_errors as e:
+        print(f"{C.RED}{t('ftp_ops.ux0data_upload_failed', error=e)}{C.RESET}")
     finally:
         _quit(ftp)
 

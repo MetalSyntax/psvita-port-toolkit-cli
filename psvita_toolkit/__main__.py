@@ -302,6 +302,11 @@ STRINGS = {
         "en": "Upload the full VPK to the PS Vita (ux0:downloads/)",
         "pt": "Enviar o VPK completo para a PS Vita (ux0:downloads/)",
     },
+    "main.menu.upload_ux0data": {
+        "es": "Subir ux0_data/<slug> completa a la PS Vita (ux0:data/<slug>/)",
+        "en": "Upload the full ux0_data/<slug> folder to the PS Vita (ux0:data/<slug>/)",
+        "pt": "Enviar a pasta ux0_data/<slug> completa para a PS Vita (ux0:data/<slug>/)",
+    },
     "main.menu.download_logs": {
         "es": "Descargar logs / crash dumps (último, elegir uno, o ver historial local)",
         "en": "Download logs / crash dumps (latest, pick one, or view local history)",
@@ -497,6 +502,7 @@ def show_project_menu(project_cfg, global_cfg):
          lambda: build_deploy.build_and_deploy_wizard(project_cfg, global_cfg)),
         (t("main.menu.upload_eboot"), lambda: ftp_ops.upload_eboot(project_cfg, global_cfg)),
         (t("main.menu.upload_vpk"), lambda: ftp_ops.upload_vpk(project_cfg, global_cfg)),
+        (t("main.menu.upload_ux0data"), lambda: ftp_ops.upload_ux0_data_dir(project_cfg, global_cfg)),
         (t("main.menu.download_logs"),
          lambda: ftp_ops.download_logs_and_dumps(project_cfg, global_cfg)),
         (t("main.menu.analyze_crash"), lambda: crash_analyzer.analyze_menu(project_cfg, global_cfg)),
