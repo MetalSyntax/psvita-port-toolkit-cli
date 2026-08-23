@@ -15,10 +15,12 @@ the VPN bypass, the shallow (non-recursive) asset comparison, and the three log/
 download modes.
 """
 
+import re
 import socket
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta
 from ftplib import FTP, all_errors
 from pathlib import Path
 
@@ -708,6 +710,84 @@ def create_dir_if_missing(ftp, path):
         print(f"{C.RED}{t('ftp_ops.dir_create_failed', path=path, error=e)}{C.RESET}")
 
 
+_LIST_MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
+def _parse_list_mtime(month_str, day_str, time_or_year_str):
+    """!
+    @brief Parse the date columns of a classic Unix `LIST` line into a sortable
+           `YYYYMMDDHHMM` string, matching the ordering property of MLSD's `modify` fact.
+    @return sortable string, or None if the columns don't parse.
+    @note When the column is a time (`HH:MM`) the year is omitted by the `LIST` format
+          itself, so the current year is assumed (rolled back one year if that would
+          place the date more than a day in the future -- the standard `ls -l`
+          convention, loosened with a 1-day tolerance so the console reporting UTC
+          against a host clock in another timezone -- observed live: a dump minutes
+          old showing as "Aug 23" while the host's `now()` was still "Aug 22" --
+          doesn't get bumped a whole year into the past).
+    """
+    month = _LIST_MONTHS.get(month_str)
+    if month is None:
+        return None
+    try:
+        day = int(day_str)
+    except ValueError:
+        return None
+    if ":" in time_or_year_str:
+        hour_str, _, minute_str = time_or_year_str.partition(":")
+        try:
+            hour = int(hour_str)
+            minute = int(minute_str)
+        except ValueError:
+            return None
+        now = datetime.now()
+        year = now.year
+        try:
+            guessed = datetime(year, month, day)
+        except ValueError:
+            guessed = None
+        if guessed is not None and guessed - now > timedelta(days=1):
+            year -= 1
+    else:
+        try:
+            year = int(time_or_year_str)
+        except ValueError:
+            return None
+        hour = minute = 0
+    return f"{year:04d}{month:02d}{day:02d}{hour:02d}{minute:02d}"
+
+
+_DIGIT_RUN_RE = re.compile(r"\d+")
+
+
+def _name_number(name):
+    """!
+    @brief Longest run of digits in a filename, as an int (-1 if none).
+    @note Crash dumps embed their creation as a literal Unix epoch
+          (`psp2core-1787451384.psp2dmp`) and per-game logs embed an
+          incrementing counter (`log_14.txt`, `log_15.txt`); either way that
+          embedded number is a precise, always-present ordering signal, unlike
+          the `LIST` mtime (minute resolution, guessed year) which is only used
+          as a tiebreaker below. The *longest* run (not the last one) is taken
+          so incidental digits in a fixed prefix/extension (the "2" in
+          `psp2core`/`psp2dmp`) don't outrank the real counter/timestamp.
+    """
+    runs = _DIGIT_RUN_RE.findall(name)
+    return int(max(runs, key=len)) if runs else -1
+
+
+def _remote_sort_key(name, mtime):
+    """!
+    @brief Sort key for remote logs/dumps entries: newest-by-embedded-number
+           first, falling back to the `LIST` mtime only to break ties (e.g.
+           two dumps whose names carry the same-length coincidental digits).
+    """
+    return (_name_number(name), mtime or "")
+
+
 def _list_entries(ftp, path):
     """!
     @brief List the entries of a remote directory.
@@ -738,7 +818,8 @@ def _list_entries(ftp, path):
         name = parts[8]
         if name in (".", ".."):
             continue
-        entries.append((name, line.startswith("d"), None))
+        mtime = _parse_list_mtime(parts[5], parts[6], parts[7])
+        entries.append((name, line.startswith("d"), mtime))
     return entries
 
 
@@ -1000,13 +1081,13 @@ def list_remote_logs(ftp, project_cfg):
     @brief List `.txt` logs in the Vita's configured logs directory.
     @param ftp Connected `ftplib.FTP` instance.
     @param project_cfg Active project config dict (`vita_logs_dir`).
-    @return list of `(name, mtime)` tuples, newest first.
+    @return list of `(name, mtime)` tuples, oldest first, newest last.
     """
     vita_logs_dir = project_cfg.get("vita_logs_dir", "/ux0:/data")
     entries = _list_entries(ftp, vita_logs_dir)
     logs = [(name, mtime) for name, is_dir, mtime in entries
             if not is_dir and (name.endswith(".txt") or "log" in name.lower())]
-    logs.sort(key=lambda x: x[1] or "", reverse=True)
+    logs.sort(key=lambda x: _remote_sort_key(x[0], x[1]))
     return logs
 
 
@@ -1015,13 +1096,13 @@ def list_remote_dumps(ftp, project_cfg):
     @brief List crash dumps (`psp2core*`/`.dmp`) in the Vita's configured data directory.
     @param ftp Connected `ftplib.FTP` instance.
     @param project_cfg Active project config dict (`vita_data_dir`).
-    @return list of `(name, mtime)` tuples, newest first.
+    @return list of `(name, mtime)` tuples, oldest first, newest last.
     """
     vita_data_dir = project_cfg.get("vita_data_dir", "/ux0:/data")
     entries = _list_entries(ftp, vita_data_dir)
     dumps = [(name, mtime) for name, is_dir, mtime in entries
              if not is_dir and (name.startswith("psp2core") or name.endswith(".dmp")) and not name.endswith(".tmp")]
-    dumps.sort(key=lambda x: x[1] or "", reverse=True)
+    dumps.sort(key=lambda x: _remote_sort_key(x[0], x[1]))
     return dumps
 
 
@@ -1138,7 +1219,7 @@ def _download_latest(ftp, project_cfg, want_dump=True, want_log=True):
     if want_dump:
         dumps = list_remote_dumps(ftp, project_cfg)
         if dumps:
-            name, _ = dumps[0]
+            name, _ = dumps[-1]
             local_path = _local_logs_dir(project_cfg) / f"{project_cfg['slug']}-{name}"
             print(t("ftp_ops.downloading_latest_dump", name=name))
             _download_remote_file(ftp, project_cfg.get("vita_data_dir"), name, local_path)
@@ -1150,7 +1231,7 @@ def _download_latest(ftp, project_cfg, want_dump=True, want_log=True):
     if want_log:
         logs = list_remote_logs(ftp, project_cfg)
         if logs:
-            name, _ = logs[0]
+            name, _ = logs[-1]
             local_path = _local_logs_dir(project_cfg) / name
             print(t("ftp_ops.downloading_latest_log", name=name))
             _download_remote_file(ftp, project_cfg.get("vita_logs_dir"), name, local_path)
@@ -1179,7 +1260,7 @@ def fetch_latest_dump_headless(project_cfg, global_cfg):
         dumps = list_remote_dumps(ftp, project_cfg)
         if not dumps:
             return None
-        name, _ = dumps[0]
+        name, _ = dumps[-1]
         local_path = _local_logs_dir(project_cfg) / f"{project_cfg['slug']}-{name}"
         _download_remote_file(ftp, project_cfg.get("vita_data_dir"), name, local_path)
         return local_path

@@ -176,7 +176,7 @@ def _latest_remote_dump_name(project_cfg, global_cfg):
         return None
     try:
         dumps = ftp_ops.list_remote_dumps(ftp, project_cfg)
-        return dumps[0][0] if dumps else None
+        return dumps[-1][0] if dumps else None
     except ftp_ops.all_errors:
         return None
     finally:
