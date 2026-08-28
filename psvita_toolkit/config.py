@@ -350,6 +350,7 @@ def new_project_config(
         "vita_cg_dir": f"ux0:/data/{slug}/cg",
         "vita_glsl_dir": f"ux0:/data/{slug}/glsl",
         "vita_game_data_dir": f"/ux0:/data/{slug}",
+        "vita_screenshots_dir": "/ux0:/picture/SCREENSHOT",
     }
 
 

@@ -43,6 +43,7 @@ from . import so_patcher
 from . import tui
 from . import utils
 from . import zenonia2_tools
+from . import ai_tracker
 from .i18n import t
 from .tui import C
 
@@ -151,6 +152,11 @@ STRINGS = {
         "es": "Correr tests/run_tests.sh del proyecto (si existe)",
         "en": "Run the project's tests/run_tests.sh (if it exists)",
         "pt": "Rodar tests/run_tests.sh do projeto (se existir)",
+    },
+    "main.utils.ai_tracker": {
+        "es": "AI Tracker: Registrar cambios sin confirmar en AI_CHANGELOG.md",
+        "en": "AI Tracker: Record uncommitted changes to AI_CHANGELOG.md",
+        "pt": "AI Tracker: Registrar alterações não confirmadas em AI_CHANGELOG.md",
     },
     "main.utils.search_symbols": {
         "es": "Buscar símbolos por patrón en los .so (readelf --dyn-syms)",
@@ -317,6 +323,11 @@ STRINGS = {
         "en": "Analyze an already-downloaded crash dump",
         "pt": "Analisar um crash dump já baixado",
     },
+    "main.menu.download_screenshots": {
+        "es": "Descargar screenshots de la consola (ux0:picture/SCREENSHOT/)",
+        "en": "Download screenshots from the console (ux0:picture/SCREENSHOT/)",
+        "pt": "Baixar screenshots do console (ux0:picture/SCREENSHOT/)",
+    },
     "main.menu.live_logs": {
         "es": "Servidor de logs en vivo (UDP debugnet)",
         "en": "Live log server (UDP debugnet)",
@@ -431,6 +442,7 @@ def _utils_submenu(project_cfg, global_cfg):
         (t("main.utils.decompile_all"), lambda: utils.decompile_all(project_cfg, global_cfg)),
         (t("main.utils.scaffold_ux0data"), lambda: utils.scaffold_ux0_data(project_cfg)),
         (t("main.utils.run_tests"), lambda: utils.run_project_tests(project_cfg)),
+        (t("main.utils.ai_tracker"), lambda: ai_tracker.track_ai_changes(project_cfg)),
         (t("main.utils.search_symbols"), do_search_symbols),
         (t("main.utils.verify_assets"),
          lambda: ftp_ops.verify_data_assets(project_cfg, global_cfg, _ask_reference_dir())),
@@ -465,7 +477,8 @@ def _project_settings(project_cfg):
     tui.clear()
     tui.print_banner(t("main.settings.title"), subtitle=project_cfg["_project_dir"])
     editable = ["game_name", "vita_ip", "vita_port", "titleid", "build_dir",
-                "vita_downloads_dir", "vita_data_dir", "vita_logs_dir", "vita_cg_dir", "vita_glsl_dir"]
+                "vita_downloads_dir", "vita_data_dir", "vita_logs_dir", "vita_cg_dir", "vita_glsl_dir",
+                "vita_screenshots_dir"]
     for key in editable:
         current = project_cfg.get(key, "")
         raw = input(f"{C.BOLD}{key}{C.RESET} [{current}]: ").strip()
@@ -505,6 +518,8 @@ def show_project_menu(project_cfg, global_cfg):
         (t("main.menu.upload_ux0data"), lambda: ftp_ops.upload_ux0_data_dir(project_cfg, global_cfg)),
         (t("main.menu.download_logs"),
          lambda: ftp_ops.download_logs_and_dumps(project_cfg, global_cfg)),
+        (t("main.menu.download_screenshots"),
+         lambda: ftp_ops.download_screenshots(project_cfg, global_cfg)),
         (t("main.menu.analyze_crash"), lambda: crash_analyzer.analyze_menu(project_cfg, global_cfg)),
         (t("main.menu.live_logs"), lambda: debugnet_server.live_log_menu(project_cfg)),
         (t("main.menu.livearea"), lambda: livearea.livearea_menu(project_cfg)),

@@ -136,15 +136,20 @@ STRINGS = {
         "en": "[*] Forcing local route via {ip} (bypasses any active VPN).",
         "pt": "[*] Forçando rota local via {ip} (contorna qualquer VPN ativa).",
     },
+    "ftp_ops.download_another_prompt": {
+        "es": "\n¿Qué deseas hacer? [ENTER] para salir, [o] para descargar otra: ",
+        "en": "\nWhat do you want to do? [ENTER] to exit, [o] to download another: ",
+        "pt": "\nO que deseja fazer? [ENTER] para sair, [o] para baixar outra: ",
+    },
     "ftp_ops.connected": {
         "es": "[+] Conexión FTP establecida.",
         "en": "[+] FTP connection established.",
         "pt": "[+] Conexão FTP estabelecida.",
     },
     "ftp_ops.connect_error": {
-        "es": "[-] Error al conectar por FTP a la PS Vita: {error}",
-        "en": "[-] Error connecting via FTP to the PS Vita: {error}",
-        "pt": "[-] Erro ao conectar via FTP ao PS Vita: {error}",
+        "es": "[-] Error al conectar por FTP a la PS Vita: {error}\n(Pista: Si ves 'Errno 61', abre VitaShell en la PS Vita y presiona SELECT para activar el FTP)",
+        "en": "[-] Error connecting via FTP to the PS Vita: {error}\n(Hint: If you see 'Errno 61', open VitaShell on the PS Vita and press SELECT to start FTP)",
+        "pt": "[-] Erro ao conectar via FTP ao PS Vita: {error}\n(Dica: Se você ver 'Errno 61', abra o VitaShell no PS Vita e pressione SELECT para iniciar o FTP)",
     },
     "ftp_ops.dir_creating": {
         "es": "[*] El directorio '{path}' no existe. Creándolo...",
@@ -222,9 +227,9 @@ STRINGS = {
         "pt": "[+] Transferência bem-sucedida. Instale o VPK pelo VitaShell em {path}",
     },
     "ftp_ops.vpk_upload_failed": {
-        "es": "[-] Falló la transferencia del VPK: {error}",
-        "en": "[-] VPK transfer failed: {error}",
-        "pt": "[-] Falha na transferência do VPK: {error}",
+        "es": "[-] Falló la transferencia del VPK: {error}\n(Pista: Si ves 'Errno 61', asegúrate de que VitaShell esté abierto en la PS Vita y la pantalla no se haya apagado)",
+        "en": "[-] VPK transfer failed: {error}\n(Hint: If you see 'Errno 61', make sure VitaShell is open on the PS Vita and the screen hasn't turned off)",
+        "pt": "[-] Falha na transferência do VPK: {error}\n(Dica: Se você ver 'Errno 61', certifique-se de que o VitaShell está aberto no PS Vita e a tela não apagou)",
     },
     "ftp_ops.ux0data_dir_not_found": {
         "es": "[-] No existe {path} -- generala primero con 'Replicar estructura local de ux0:data/<slug>/' en Utilidades.",
@@ -277,9 +282,9 @@ STRINGS = {
         "pt": "[+] eboot.bin enviado. Já dá para iniciar o jogo sem reinstalar o VPK inteiro.",
     },
     "ftp_ops.transfer_failed": {
-        "es": "[-] Falló la transferencia: {error}",
-        "en": "[-] Transfer failed: {error}",
-        "pt": "[-] Falha na transferência: {error}",
+        "es": "[-] Falló la transferencia: {error}\n(Pista: Si ves 'Errno 61', asegúrate de que VitaShell esté abierto en la PS Vita y la pantalla no se haya apagado)",
+        "en": "[-] Transfer failed: {error}\n(Hint: If you see 'Errno 61', make sure VitaShell is open on the PS Vita and the screen hasn't turned off)",
+        "pt": "[-] Falha na transferência: {error}\n(Dica: Se você ver 'Errno 61', certifique-se de que o VitaShell está aberto no PS Vita e a tela não apagou)",
     },
     "ftp_ops.no_logs_found": {
         "es": "[-] No hay logs en {dir}.",
@@ -495,6 +500,56 @@ STRINGS = {
         "es": "[+] Todas las carpetas coinciden en cantidad de archivos.",
         "en": "[+] All folders match in file count.",
         "pt": "[+] Todas as pastas coincidem na quantidade de arquivos.",
+    },
+    "ftp_ops.menu_screenshot_latest": {
+        "es": "Descargar la ÚLTIMA screenshot de la consola",
+        "en": "Download the LATEST screenshot from the console",
+        "pt": "Baixar a ÚLTIMA screenshot do console",
+    },
+    "ftp_ops.menu_screenshot_pick": {
+        "es": "Elegir una screenshot ESPECÍFICA de las que hay ahora en la consola",
+        "en": "Pick a SPECIFIC screenshot from what's currently on the console",
+        "pt": "Escolher uma screenshot ESPECÍFICA das que estão agora no console",
+    },
+    "ftp_ops.menu_screenshot_all": {
+        "es": "Descargar TODAS las screenshots que hay ahora en la consola",
+        "en": "Download ALL screenshots currently on the console",
+        "pt": "Baixar TODAS as screenshots que estão agora no console",
+    },
+    "ftp_ops.menu_screenshot_history": {
+        "es": "Ver HISTORIAL local (screenshots ya descargadas antes)",
+        "en": "View local HISTORY (previously downloaded screenshots)",
+        "pt": "Ver HISTÓRICO local (screenshots já baixadas antes)",
+    },
+    "ftp_ops.no_screenshots_found": {
+        "es": "[-] No hay screenshots en {dir}.",
+        "en": "[-] No screenshots in {dir}.",
+        "pt": "[-] Não há screenshots em {dir}.",
+    },
+    "ftp_ops.downloading_latest_screenshot": {
+        "es": "[+] Última screenshot: '{name}' -> descargando...",
+        "en": "[+] Latest screenshot: '{name}' -> downloading...",
+        "pt": "[+] Última screenshot: '{name}' -> baixando...",
+    },
+    "ftp_ops.screenshots_available_title": {
+        "es": "Screenshots disponibles en la consola:",
+        "en": "Screenshots available on the console:",
+        "pt": "Screenshots disponíveis no console:",
+    },
+    "ftp_ops.screenshots_found_downloading": {
+        "es": "[+] {count} screenshot(s) encontrada(s). Descargando...",
+        "en": "[+] {count} screenshot(s) found. Downloading...",
+        "pt": "[+] {count} screenshot(s) encontrada(s). Baixando...",
+    },
+    "ftp_ops.all_screenshots_downloaded": {
+        "es": "[+] Todas las screenshots descargadas en {dir}",
+        "en": "[+] All screenshots downloaded to {dir}",
+        "pt": "[+] Todas as screenshots baixadas em {dir}",
+    },
+    "ftp_ops.local_screenshots_title": {
+        "es": "Screenshots ya descargadas antes (más reciente primero):",
+        "en": "Previously downloaded screenshots (newest first):",
+        "pt": "Screenshots já baixadas antes (mais recente primeiro):",
     },
 }
 i18n.register(STRINGS)
@@ -1172,36 +1227,46 @@ def download_logs_and_dumps(project_cfg, global_cfg):
         if action == "latest":
             _download_latest(ftp, project_cfg, want_dump=True, want_log=True)
         elif action == "pick_log":
-            logs = list_remote_logs(ftp, project_cfg)
-            if not logs:
-                print(f"{C.YELLOW}{t('ftp_ops.no_logs_found', dir=project_cfg.get('vita_logs_dir'))}{C.RESET}")
-                return
-            picked = tui.select_list(
-                t("ftp_ops.logs_available_title"), logs,
-                label_fn=lambda e: f"{e[0]:<40} {C.DIM}{e[1] or ''}{C.RESET}",
-            )
-            if picked is None:
-                return
-            name, _ = picked
-            local_path = _local_logs_dir(project_cfg) / name
-            _download_remote_file(ftp, project_cfg.get("vita_logs_dir"), name, local_path)
-            print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
+            while True:
+                logs = list_remote_logs(ftp, project_cfg)
+                if not logs:
+                    print(f"{C.YELLOW}{t('ftp_ops.no_logs_found', dir=project_cfg.get('vita_logs_dir'))}{C.RESET}")
+                    break
+                picked = tui.select_list(
+                    t("ftp_ops.logs_available_title"), logs,
+                    label_fn=lambda e: f"{e[0]:<40} {C.DIM}{e[1] or ''}{C.RESET}",
+                )
+                if picked is None:
+                    break
+                name, _ = picked
+                local_path = _local_logs_dir(project_cfg) / name
+                _download_remote_file(ftp, project_cfg.get("vita_logs_dir"), name, local_path)
+                print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
+                
+                ans = input(f"{C.CYAN}{t('ftp_ops.download_another_prompt')}{C.RESET}").strip().lower()
+                if ans != "o":
+                    break
         elif action == "pick_dump":
-            dumps = list_remote_dumps(ftp, project_cfg)
-            if not dumps:
-                print(f"{C.YELLOW}{t('ftp_ops.no_dumps_found', dir=project_cfg.get('vita_data_dir'))}{C.RESET}")
-                return
-            picked = tui.select_list(
-                t("ftp_ops.dumps_available_title"), dumps,
-                label_fn=lambda e: f"{e[0]:<40} {C.DIM}{e[1] or ''}{C.RESET}",
-            )
-            if picked is None:
-                return
-            name, _ = picked
-            local_path = _local_logs_dir(project_cfg) / f"{project_cfg['slug']}-{name}"
-            _download_remote_file(ftp, project_cfg.get("vita_data_dir"), name, local_path)
-            print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
-            _offer_analyze(project_cfg, local_path)
+            while True:
+                dumps = list_remote_dumps(ftp, project_cfg)
+                if not dumps:
+                    print(f"{C.YELLOW}{t('ftp_ops.no_dumps_found', dir=project_cfg.get('vita_data_dir'))}{C.RESET}")
+                    break
+                picked = tui.select_list(
+                    t("ftp_ops.dumps_available_title"), dumps,
+                    label_fn=lambda e: f"{e[0]:<40} {C.DIM}{e[1] or ''}{C.RESET}",
+                )
+                if picked is None:
+                    break
+                name, _ = picked
+                local_path = _local_logs_dir(project_cfg) / f"{project_cfg['slug']}-{name}"
+                _download_remote_file(ftp, project_cfg.get("vita_data_dir"), name, local_path)
+                print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
+                _offer_analyze(project_cfg, local_path)
+                
+                ans = input(f"{C.CYAN}{t('ftp_ops.download_another_prompt')}{C.RESET}").strip().lower()
+                if ans != "o":
+                    break
     except all_errors as e:
         print(f"{C.RED}{t('ftp_ops.ftp_generic_error', error=e)}{C.RESET}")
     finally:
@@ -1409,6 +1474,191 @@ def sync_shaders(project_cfg, global_cfg):
 
     print(t("ftp_ops.sync_step2"))
     upload_cg_shaders(project_cfg, global_cfg)
+
+
+# ---------------------------------------------------------------------------
+# Screenshots (ux0:picture/SCREENSHOT/)
+# ---------------------------------------------------------------------------
+
+_SCREENSHOT_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
+
+
+def _local_screenshots_dir(project_cfg):
+    """!
+    @brief Path to the project's local screenshots directory, creating it if needed.
+    @param project_cfg Active project config dict.
+    @return `Path` to `<project_dir>/screenshots`.
+    """
+    d = Path(project_cfg["_project_dir"]) / "screenshots"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _list_remote_screenshot_files(ftp, path):
+    """!
+    @brief Recursively walk `path` collecting screenshot files.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param path Remote directory to walk (absolute).
+    @return list of `(relpath, mtime)` tuples, `relpath` relative to `path` (using `/`
+            as separator, e.g. `"a1B2c3D4/00000001.jpg"`), unsorted.
+    @note The Vita doesn't drop screenshots directly in `ux0:picture/SCREENSHOT/` --
+          each one lands inside its own randomly-named subfolder one level down, so
+          a flat (non-recursive) listing like `list_remote_logs()`/`list_remote_dumps()`
+          would find nothing.
+    """
+    results = []
+    for name, is_dir, mtime in _list_entries(ftp, path):
+        if is_dir:
+            for rel, sub_mtime in _list_remote_screenshot_files(ftp, f"{path}/{name}"):
+                results.append((f"{name}/{rel}", sub_mtime))
+        elif name.lower().endswith(_SCREENSHOT_EXTS):
+            results.append((name, mtime))
+    return results
+
+
+def list_remote_screenshots(ftp, project_cfg):
+    """!
+    @brief List screenshots in the Vita's `ux0:picture/SCREENSHOT/` folder, descending
+           into its per-shot subfolders.
+    @param ftp Connected `ftplib.FTP` instance.
+    @param project_cfg Active project config dict (`vita_screenshots_dir`).
+    @return list of `(relpath, mtime)` tuples, oldest first, newest last. `relpath` is
+            relative to the configured screenshots directory (e.g.
+            `"a1B2c3D4/00000001.jpg"`).
+    """
+    vita_screenshots_dir = project_cfg.get("vita_screenshots_dir", "/ux0:/picture/SCREENSHOT")
+    shots = _list_remote_screenshot_files(ftp, vita_screenshots_dir)
+    shots.sort(key=lambda x: _remote_sort_key(x[0].rsplit("/", 1)[-1], x[1]))
+    return shots
+
+
+def _split_screenshot_path(base_dir, relpath):
+    """!
+    @brief Split a screenshot's `relpath` (as returned by `list_remote_screenshots()`)
+           into its remote parent directory and bare filename.
+    @param base_dir The configured `vita_screenshots_dir`.
+    @param relpath Relative path, possibly containing a per-shot subfolder.
+    @return `(remote_dir, remote_name)` tuple suitable for `_download_remote_file()`.
+    """
+    if "/" in relpath:
+        subdir, name = relpath.rsplit("/", 1)
+        return f"{base_dir}/{subdir}", name
+    return base_dir, relpath
+
+
+import re
+def _get_organized_local_path(local_base, relpath):
+    """!
+    @brief Given a relative path (e.g. 'TITLEID/2023-11-20-135544.jpg'),
+           returns a Path where the file is grouped into a folder by date
+           (e.g. 'TITLEID/2023-11-20/2023-11-20-135544.jpg').
+    """
+    path_parts = list(Path(relpath).parts)
+    filename = path_parts[-1]
+    
+    # Busca la fecha YYYY-MM-DD en el nombre del archivo
+    match = re.search(r'^(\d{4}-\d{2}-\d{2})', filename)
+    if match:
+        date_str = match.group(1)
+        # Inserta la carpeta de la fecha justo antes del nombre del archivo
+        path_parts.insert(-1, date_str)
+        
+    return local_base.joinpath(*path_parts)
+
+
+def download_screenshots(project_cfg, global_cfg):
+    """!
+    @brief Menu: download the LATEST screenshot, pick a SPECIFIC one, download ALL of
+           them, or browse the local HISTORY of previously downloaded screenshots.
+    @param project_cfg Active project config dict.
+    @param global_cfg Global config dict (VPN bypass, etc).
+    """
+    actions = [
+        ("latest", t("ftp_ops.menu_screenshot_latest")),
+        ("pick", t("ftp_ops.menu_screenshot_pick")),
+        ("all", t("ftp_ops.menu_screenshot_all")),
+        ("history", t("ftp_ops.menu_screenshot_history")),
+    ]
+    chosen = tui.select_list(t("ftp_ops.what_to_do"), actions, label_fn=lambda a: a[1])
+    if chosen is None:
+        return
+    action, _ = chosen
+
+    if action == "history":
+        _browse_local_screenshots(project_cfg)
+        return
+
+    ftp = _connect(project_cfg, global_cfg)
+    if not ftp:
+        return
+    vita_screenshots_dir = project_cfg.get("vita_screenshots_dir", "/ux0:/picture/SCREENSHOT")
+    try:
+        shots = list_remote_screenshots(ftp, project_cfg)
+        if not shots:
+            print(f"{C.YELLOW}{t('ftp_ops.no_screenshots_found', dir=vita_screenshots_dir)}{C.RESET}")
+            return
+
+        if action == "latest":
+            relpath, _ = shots[-1]
+            remote_dir, remote_name = _split_screenshot_path(vita_screenshots_dir, relpath)
+            local_path = _get_organized_local_path(_local_screenshots_dir(project_cfg), relpath)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            print(t("ftp_ops.downloading_latest_screenshot", name=relpath))
+            _download_remote_file(ftp, remote_dir, remote_name, local_path)
+            print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
+
+        elif action == "pick":
+            while True:
+                picked = tui.select_list(
+                    t("ftp_ops.screenshots_available_title"), shots,
+                    label_fn=lambda e: f"{e[0]:<48} {C.DIM}{e[1] or ''}{C.RESET}",
+                )
+                if picked is None:
+                    break
+                relpath, _ = picked
+                remote_dir, remote_name = _split_screenshot_path(vita_screenshots_dir, relpath)
+                local_path = _get_organized_local_path(_local_screenshots_dir(project_cfg), relpath)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                _download_remote_file(ftp, remote_dir, remote_name, local_path)
+                print(f"{C.GREEN}{t('ftp_ops.downloaded_at', path=local_path)}{C.RESET}")
+                
+                ans = input(f"{C.CYAN}{t('ftp_ops.download_another_prompt')}{C.RESET}").strip().lower()
+                if ans != "o":
+                    break
+
+        elif action == "all":
+            print(t("ftp_ops.screenshots_found_downloading", count=len(shots)))
+            local_dir = _local_screenshots_dir(project_cfg)
+            for relpath, _ in shots:
+                remote_dir, remote_name = _split_screenshot_path(vita_screenshots_dir, relpath)
+                local_path = _get_organized_local_path(local_dir, relpath)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                _download_remote_file(ftp, remote_dir, remote_name, local_path)
+            print(f"{C.GREEN}{t('ftp_ops.all_screenshots_downloaded', dir=local_dir)}{C.RESET}")
+    except all_errors as e:
+        print(f"{C.RED}{t('ftp_ops.ftp_generic_error', error=e)}{C.RESET}")
+    finally:
+        _quit(ftp)
+
+
+def _browse_local_screenshots(project_cfg):
+    """!
+    @brief List previously downloaded screenshots kept in `<project_dir>/screenshots/`.
+    @param project_cfg Active project config dict.
+    """
+    local_dir = _local_screenshots_dir(project_cfg)
+    files = sorted(
+        (p for p in local_dir.rglob("*") if p.is_file() and p.suffix.lower() in _SCREENSHOT_EXTS),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )
+    print(f"\n{C.BOLD}{t('ftp_ops.local_screenshots_title')}{C.RESET}")
+    if not files:
+        print(f"{C.DIM}{t('ftp_ops.history_empty')}{C.RESET}")
+        return
+    for p in files:
+        mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime))
+        rel = p.relative_to(local_dir)
+        print(f"  {str(rel):<48} {C.DIM}{mtime}  {p}{C.RESET}")
 
 
 # ---------------------------------------------------------------------------

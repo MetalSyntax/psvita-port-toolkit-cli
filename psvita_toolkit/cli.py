@@ -112,6 +112,8 @@ def build_parser():
     p_analyze.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_analyze.add_argument("--elf", help="Path to the Vita .elf (default: auto-detected).")
     p_analyze.add_argument("--so", help="Path to the original Android .so (default: auto-detected).")
+    p_analyze.add_argument("--so-base", help="Runtime base address of the .so, hex (e.g. 0x98000000).")
+
 
     p_init = sub.add_parser("init", help="Create a new port from an Android .apk (non-interactive).")
     p_init.add_argument("--apk", required=True, help="Path to the source .apk.")
@@ -151,6 +153,18 @@ def build_parser():
     p_ctx.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_ctx.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Output format (default: markdown).")
     p_ctx.add_argument("--out", help="Explicit output path.")
+    p_ctx.add_argument("--log", help="Explicit path to console/live log file (default: auto-detected newest in logs/).")
+    p_ctx.add_argument("--log-lines", type=int, default=35, help="Number of log lines from the tail to include (default: 35).")
+    p_ctx.add_argument("--so", help="Explicit path to the original Android .so binary.")
+    p_ctx.add_argument("--decompiled-dir", help="Explicit path to the decompiled sources directory (Ghidra/jadx).")
+    p_ctx.add_argument("--stubs-dir", help="Explicit path to the source/stubs directory.")
+    p_ctx.add_argument("--analysis", help="Explicit path to the .analysis.txt report.")
+    p_ctx.add_argument("--triage", help="Explicit path to the .triage_summary.md report.")
+    p_ctx.add_argument("--stdout", action="store_true", help="Print the generated prompt directly to standard output.")
+    p_ctx.add_argument("--copy", action="store_true", help="Copy the generated prompt directly to system clipboard.")
+    p_ctx.add_argument("--max-chars", type=int, default=14000, help="Character budget limit for token optimization (default: 14000).")
+
+
 
     p_patch = sub.add_parser("so-patch", help="Scan for telemetry/IAP SDKs and generate neutralization stubs.")
     p_patch.add_argument("--project", help="Path to the port directory (default: current directory).")
@@ -319,7 +333,7 @@ def _cmd_deploy(args):
 def _cmd_analyze(args):
     """!
     @brief `analyze` subcommand handler: parse and report on a crash dump.
-    @param args Parsed CLI args (`dump_path`, `project`, `elf`, `so`).
+    @param args Parsed CLI args (`dump_path`, `project`, `elf`, `so`, `so_base`).
     @return `1` on missing config/project or if the dump couldn't be parsed, else `0`.
     """
     from . import crash_analyzer
@@ -330,9 +344,11 @@ def _cmd_analyze(args):
     if err:
         return _fail(err)
     i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+    so_base = int(args.so_base, 16) if args.so_base else None
     ok = crash_analyzer.analyze(project_cfg, args.dump_path, global_cfg=global_cfg,
-                                 elf_path=args.elf, so_path=args.so)
+                                 elf_path=args.elf, so_path=args.so, so_base=so_base)
     return 0 if ok else 1
+
 
 
 def _cmd_init(args):
@@ -470,7 +486,7 @@ def _cmd_logs_live(args):
 def _cmd_export_context(args):
     """!
     @brief `export-context` subcommand handler: export AI crash context bundle.
-    @param args Parsed CLI args (`dump_path`, `project`, `format`, `out`).
+    @param args Parsed CLI args (`dump_path`, `project`, `format`, `out`, `log`, `log_lines`, `stdout`, `copy`, `max_chars`, `so`, `decompiled_dir`, `stubs_dir`, `analysis`, `triage`).
     @return `1` on missing config/project or error, else `0`.
     """
     from . import context_feeder
@@ -482,7 +498,13 @@ def _cmd_export_context(args):
         return _fail(err)
     i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
     return context_feeder.export_context_cli(
-        project_cfg, args.dump_path, global_cfg=global_cfg, fmt=args.format, out=args.out)
+        project_cfg, args.dump_path, global_cfg=global_cfg, fmt=args.format, out=args.out,
+        log_path=args.log, log_lines=args.log_lines, stdout=args.stdout, copy=args.copy,
+        max_chars=args.max_chars, so_path=args.so, decompiled_dir=args.decompiled_dir,
+        stubs_dir=args.stubs_dir, analysis_path=args.analysis, triage_path=args.triage
+    )
+
+
 
 
 def _cmd_so_patch(args):

@@ -22,6 +22,7 @@ import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from pathlib import Path
 
 from . import tui
 from .tui import C
@@ -113,6 +114,21 @@ STRINGS = {
         "es": "[+] Base de memoria del .so AUTO-DETECTADA en: 0x{addr:x}",
         "en": "[+] .so memory base AUTO-DETECTED at: 0x{addr:x}",
         "pt": "[+] Base de memória do .so AUTO-DETECTADA em: 0x{addr:x}",
+    },
+    "crash_analyzer.so_base_from_log": {
+        "es": "[+] Base de memoria del .so extraída de logs (SO_BASE): 0x{addr:x}",
+        "en": "[+] .so memory base extracted from logs (SO_BASE): 0x{addr:x}",
+        "pt": "[+] Base de memória do .so extraída dos logs (SO_BASE): 0x{addr:x}",
+    },
+    "crash_analyzer.so_chosen": {
+        "es": "[+] Módulo .so principal seleccionado: '{name}' ({size_kb} KB)",
+        "en": "[+] Main .so module selected: '{name}' ({size_kb} KB)",
+        "pt": "[+] Módulo .so principal selecionado: '{name}' ({size_kb} KB)",
+    },
+    "crash_analyzer.menu_pick_so": {
+        "es": "Elegí el módulo .so principal del juego a utilizar:",
+        "en": "Pick the main game .so module to use:",
+        "pt": "Escolha o módulo .so principal do jogo a usar:",
     },
     "crash_analyzer.so_base_fallback": {
         "es": "[*] Base de memoria del .so, fallback: 0x{addr:x}",
@@ -414,26 +430,51 @@ class SymbolTable:
         return f"{prev[1]} + 0x{offset - prev[0]:x}" if prev else f"0x{offset:x}"
 
 
-def _auto_detect_so_base(dump_addrs, so_syms):
+def _extract_so_base_from_logs(project_dir):
+    """!
+    @brief Scan recent project logs to find confirmed runtime SO_BASE (e.g. 'SO_BASE=0x98000000').
+    @param project_dir Path to the port's project directory.
+    @return Integer base address if found in any recent log, else `None`.
+    """
+    if not project_dir or not os.path.isdir(project_dir):
+        return None
+    log_files = glob.glob(os.path.join(project_dir, "logs", "*.log")) + glob.glob(os.path.join(project_dir, "*.log"))
+    if not log_files:
+        return None
+    log_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+
+    pattern = re.compile(
+        r'(?:SO_BASE|so_base|Base address|base\s*addr|load\s*base)\s*[=:]\s*(0x[0-9a-fA-F]{8})|'
+        r'Loaded\s+.*at\s+(0x[0-9a-fA-F]{8})|'
+        r'\[SOLOADER\].*(0x9[0-9a-fA-F]{7})',
+        re.IGNORECASE
+    )
+
+    for log_path in log_files[:5]:
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    m = pattern.search(line)
+                    if m:
+                        for g in m.groups():
+                            if g:
+                                try:
+                                    return int(g, 16)
+                                except ValueError:
+                                    continue
+        except OSError:
+            continue
+    return None
+
+
+def _auto_detect_so_base(dump_addrs, so_syms, so_path=None):
     """!
     @brief Guess the `.so`'s runtime load base by voting across candidate
            addresses found on the stack/registers against known symbol offsets.
-    @details For every raw address in `dump_addrs` that falls in the
-             `0x80000000`-`0x9fffffff` window (the Vita's typical user `.so`
-             mapping range), and for every known symbol `(sym_start, sym_end)`
-             in `so_syms`, computes a candidate base as `(addr - sym_start)`
-             rounded down to a 4 KiB page boundary, then keeps it only if the
-             address falls within that symbol's `[0, size]` span relative to
-             the candidate base. Each valid `(address, symbol)` pair casts one
-             vote for its candidate base; the most-voted candidate wins.
-    @param dump_addrs Iterable of raw addresses collected from the crashed
-           thread(s) (PC, LR, stack words).
-    @param so_syms `SymbolTable` for the `.so`.
-    @return The most likely load base address, or `None` if no candidate
-            received any votes (or `so_syms` has no symbols).
     """
     if not so_syms or not so_syms.symbols:
         return None
+    so_size = os.path.getsize(so_path) if so_path and os.path.isfile(so_path) else 0x10000000
     candidates = Counter()
     for raw_addr in dump_addrs:
         val = raw_addr & ~1
@@ -442,7 +483,8 @@ def _auto_detect_so_base(dump_addrs, so_syms):
         for sym_start, sym_end, _, _ in so_syms.symbols:
             size = max(sym_end - sym_start, 0x100)
             base_cand = (val - sym_start) & ~0xFFF
-            if 0x80000000 <= base_cand <= 0x9fffffff and 0 <= (val - base_cand - sym_start) <= size:
+            offset_in_so = val - base_cand
+            if 0x80000000 <= base_cand <= 0x9fffffff and 0 <= offset_in_so < so_size and 0 <= (val - base_cand - sym_start) <= size:
                 candidates[base_cand] += 1
     if candidates:
         return candidates.most_common(1)[0][0]
@@ -484,23 +526,90 @@ def _disassemble_around(bin_path, offset, is_thumb=True):
         return [t("crash_analyzer.disassemble_error", error=e)]
 
 
-def _auto_find_files(project_dir, build_dir):
+JUNK_SO_KEYWORDS = (
+    "inject", "admob", "google", "bypass", "xposed", "substrate",
+    "crashlytics", "ironsource", "unityplugin", "vungle", "applovin",
+    "facebook", "chartboost", "adjust", "appsflyer", "billing"
+)
+
+
+def _score_so_candidate(so_path, project_dir, project_cfg=None):
     """!
-    @brief Best-effort discovery of the port's ELF and Android `.so` binaries.
-    @details Looks for a single `*.elf` under the build dir (or project root),
-             and recursively for `*.so` files under the project, preferring
-             any whose name contains `libgame` or `libmain`.
+    @brief Score a `.so` candidate so real game engines beat crack/ad layers.
+    """
+    base_name = os.path.basename(so_path).lower()
+    score = 0
+
+    # 1. Configured name in project_cfg gets top priority
+    if project_cfg:
+        configured = (project_cfg.get("main_so") or project_cfg.get("so_name") or project_cfg.get("so_file") or "").lower()
+        if configured and (configured in base_name or base_name == configured):
+            return 100000
+
+    # 2. Match against decompiled directory names (e.g. decompiled/libpes2012)
+    stem = Path(so_path).stem.lower()
+    decomp_dirs = glob.glob(os.path.join(project_dir, "decompiled", "*"))
+    for d in decomp_dirs:
+        d_name = os.path.basename(d).lower()
+        if stem in d_name or d_name in stem:
+            score += 50000
+
+    # 3. Penalize junk/ad/crack layers
+    for junk in JUNK_SO_KEYWORDS:
+        if junk in base_name:
+            score -= 100000
+
+    # 4. Keyword bonuses
+    if "libgame" in base_name or "libmain" in base_name or "libapp" in base_name or "libnative" in base_name:
+        score += 10000
+
+    # 5. Project folder / name match
+    proj_name = os.path.basename(project_dir).lower().replace("-vita", "").replace("_vita", "")
+    for part in re.split(r'[-_]', proj_name):
+        if len(part) >= 3 and part in base_name:
+            score += 20000
+
+    # 6. File size bonus: real engines are MBs, inject/ad stubs are tiny KB
+    try:
+        size_kb = os.path.getsize(so_path) // 1024
+        score += min(size_kb, 50000)
+    except OSError:
+        pass
+
+    return score
+
+
+def _auto_find_files(project_dir, build_dir, project_cfg=None):
+    """!
+    @brief Intelligent discovery of the port's ELF and Android `.so` binaries.
     @param project_dir Path to the port's project directory.
     @param build_dir Local build output directory, relative to `project_dir`.
-    @return `(elf_file, so_file)` tuple; either element is `None` if nothing matched.
+    @param project_cfg Optional project config dict to prioritize configured `.so`.
+    @return `(elf_file, so_file)` tuple.
     """
     elf_candidates = glob.glob(os.path.join(project_dir, build_dir, "*.elf")) + glob.glob(os.path.join(project_dir, "*.elf"))
     elf_file = elf_candidates[0] if elf_candidates else None
 
-    so_candidates = glob.glob(os.path.join(project_dir, "**", "*.so"), recursive=True)
-    so_candidates.sort(key=lambda x: 0 if ("libgame" in x or "libmain" in x) else 1)
-    so_file = so_candidates[0] if so_candidates else None
-    return elf_file, so_file
+    # Check project_cfg first
+    if project_cfg:
+        configured_so = project_cfg.get("main_so") or project_cfg.get("so_name") or project_cfg.get("so_file")
+        if configured_so:
+            full_conf = os.path.join(project_dir, configured_so) if not os.path.isabs(configured_so) else configured_so
+            if os.path.isfile(full_conf):
+                return elf_file, full_conf
+
+    so_candidates = []
+    for p in glob.glob(os.path.join(project_dir, "**", "*.so"), recursive=True):
+        if os.path.basename(p).startswith("._"):
+            continue
+        so_candidates.append(p)
+
+    if not so_candidates:
+        return elf_file, None
+
+    so_candidates.sort(key=lambda p: _score_so_candidate(p, project_dir, project_cfg), reverse=True)
+    return elf_file, so_candidates[0]
+
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +816,7 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     exe_name = project_cfg.get("project_name", "")
     build_dir = project_cfg.get("build_dir", "build")
 
-    auto_elf, auto_so = _auto_find_files(project_dir, build_dir)
+    auto_elf, auto_so = _auto_find_files(project_dir, build_dir, project_cfg=project_cfg)
     elf_path = elf_path or auto_elf
     so_path = so_path or auto_so
 
@@ -729,6 +838,17 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     log(t("crash_analyzer.header_so", path=so_path or t("crash_analyzer.not_detected")))
     log("=" * 80)
 
+    if so_path and os.path.isfile(so_path):
+        size_kb = os.path.getsize(so_path) // 1024
+        log(t("crash_analyzer.so_chosen", name=os.path.basename(so_path), size_kb=size_kb))
+        # Remember this as main_so if not already set
+        if project_cfg and not project_cfg.get("main_so"):
+            project_cfg["main_so"] = os.path.basename(so_path)
+            try:
+                cfgmod.save_project_config(project_dir, project_cfg)
+            except Exception:
+                pass
+
     core = CoreParser(dump_path)
     elf = ElfParser(elf_path) if elf_path and os.path.exists(elf_path) else None
     so_syms = SymbolTable(so_path) if so_path and os.path.exists(so_path) else None
@@ -745,13 +865,27 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
             if d:
                 all_addrs.append(u32(d, 0))
 
-    if not so_base and so_syms:
-        so_base = _auto_detect_so_base(all_addrs, so_syms)
-        if so_base:
-            log(t("crash_analyzer.so_base_auto", addr=so_base))
-        else:
-            so_base = 0x98000000
-            log(t("crash_analyzer.so_base_fallback", addr=so_base))
+    if not so_base:
+        if project_cfg and project_cfg.get("so_base"):
+            try:
+                cfg_b = project_cfg["so_base"]
+                so_base = int(cfg_b, 16) if isinstance(cfg_b, str) else int(cfg_b)
+            except ValueError:
+                pass
+
+        if not so_base:
+            log_base = _extract_so_base_from_logs(project_dir)
+            if log_base:
+                so_base = log_base
+                log(t("crash_analyzer.so_base_from_log", addr=so_base))
+
+        if not so_base and so_syms:
+            so_base = _auto_detect_so_base(all_addrs, so_syms, so_path=so_path)
+            if so_base:
+                log(t("crash_analyzer.so_base_auto", addr=so_base))
+            else:
+                so_base = 0x98000000
+                log(t("crash_analyzer.so_base_fallback", addr=so_base))
 
     def resolve(addr):
         notation = core.get_address_notation("", addr)
@@ -764,12 +898,16 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
                 line_str = line_info.decode("utf-8", "ignore") if isinstance(line_info, bytes) else str(line_info)
                 return f"0x{addr:x} [{mod_name} + 0x{off:x}] ({line_str})"
             return f"0x{addr:x} [{mod_name} seg{seg} + 0x{off:x}]"
-        if so_base and (so_base <= addr <= so_base + 0x2000000 or 0x90000000 <= addr <= 0x9fffffff):
+        if so_base and (so_base <= addr <= so_base + 0x20000000 or 0x80000000 <= addr <= 0x9fffffff):
             so_off = addr - so_base
+            so_size = os.path.getsize(so_path) if so_path and os.path.isfile(so_path) else 0x10000000
             so_name = os.path.basename(so_path) if so_path else "lib.so"
-            if so_syms:
-                return f"0x{addr:x} [{so_name} + 0x{so_off:x} -> {so_syms.lookup(so_off)}]"
-            return f"0x{addr:x} [{so_name} + 0x{so_off:x}]"
+            if 0 <= so_off < so_size:
+                if so_syms:
+                    return f"0x{addr:x} [{so_name} + 0x{so_off:x} -> {so_syms.lookup(so_off)}]"
+                return f"0x{addr:x} [{so_name} + 0x{so_off:x}]"
+            elif so_off >= so_size:
+                return f"0x{addr:x} [{so_name} FUERA DE RANGO: offset 0x{so_off:x} > tamaño 0x{so_size:x}]"
         return f"0x{addr:x}"
 
     triage_frames = []
@@ -868,7 +1006,7 @@ def analyze_menu(project_cfg, global_cfg):
     @param project_cfg Per-project config dict.
     @param global_cfg Global config dict.
     """
-    from . import ftp_ops
+    from . import ftp_ops, config as cfgmod
     dumps = ftp_ops.list_local_history(project_cfg, "dumps")
     if not dumps:
         print(f"{C.YELLOW}{t('crash_analyzer.menu_no_dumps')}{C.RESET}")
@@ -877,4 +1015,25 @@ def analyze_menu(project_cfg, global_cfg):
     chosen = tui.select_list(t("crash_analyzer.menu_available_dumps"), dumps, label_fn=lambda p: p.name)
     if chosen is None:
         return
-    analyze(project_cfg, str(chosen), global_cfg)
+
+    # Check if multiple .so exist to let the user review or choose the main .so
+    project_dir = project_cfg.get("_project_dir", "")
+    all_sos = [p for p in glob.glob(os.path.join(project_dir, "**", "*.so"), recursive=True) if not os.path.basename(p).startswith("._")]
+    selected_so = None
+    if len(all_sos) > 1 and not project_cfg.get("main_so"):
+        all_sos.sort(key=lambda p: _score_so_candidate(p, project_dir, project_cfg), reverse=True)
+        so_choice = tui.select_list(
+            t("crash_analyzer.menu_pick_so"),
+            all_sos,
+            label_fn=lambda p: f"{os.path.basename(p)} ({os.path.getsize(p)//1024} KB)"
+        )
+        if so_choice:
+            selected_so = str(so_choice)
+            project_cfg["main_so"] = os.path.basename(selected_so)
+            try:
+                cfgmod.save_project_config(project_dir, project_cfg)
+            except Exception:
+                pass
+
+    analyze(project_cfg, str(chosen), global_cfg=global_cfg, so_path=selected_so)
+

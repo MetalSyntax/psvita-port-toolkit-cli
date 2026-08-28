@@ -1,33 +1,27 @@
 """!
 @file context_feeder.py
-@brief Copiloto IA integrado: empaqueta todo lo que un asistente de código (Claude
-       Code, etc.) necesita para proponer un fix de un crash en UN solo archivo.
+@brief Copiloto IA integrado y optimizador de tokens: empaqueta de forma quirúrgica
+       todo lo que un modelo de IA necesita para diagnosticar y resolver un crash en PS Vita.
 
 @details
-`crash_analyzer.analyze()` ya resuelve la cadena de llamadas de un crash contra los
-símbolos del `.so`, la cruza contra el pseudo-C decompilado con Ghidra y el Java
-decompilado con jadx, y escribe todo eso en `<dump_path>.triage_summary.md` (ver
-`crash_analyzer._write_triage_summary()`). Este módulo NO reimplementa nada de eso:
-lee ese Markdown ya generado, lo parsea de vuelta a una estructura de datos, le suma
-una tercera fuente que `crash_analyzer` no mira (el stub JNI actual en
-`generated_jni_stubs.c`/`source/**/*.c`, generado por `jni_analyzer.generate_jni_stubs()`),
-y arma con las tres un documento único -- listo para pegar en un chat de IA o pasarle
-a `claude -p` -- o el mismo contenido como JSON para consumo por otra herramienta.
+Combina en un único archivo Markdown/JSON ultra-optimizado en tokens:
+1. Diagnóstico de registros CPU, hilo y causa raíz desde `<dump_path>.analysis.txt`.
+2. Instrucción exacta del crash y desensamblado ARM/Thumb.
+3. Últimas líneas relevantes del log (live log / UDP / consola) previas al crash.
+4. Snippets acotados (con contexto de líneas) de Ghidra pseudo-C, JADX Java y stubs C de `source/`.
+5. Prompt automatizado estructurado para solicitar directamente el diagnóstico y el patch diff.
 
-Sin este módulo, portear un fix significaba abrir a mano 4 cosas (el log/dump, el
-pseudo-C de Ghidra, el Java de jadx, y el stub .c) y copiar/pegar cada una por
-separado en el chat del asistente. `export_context()` deja todo eso en un archivo.
-
-See `docs/dev-notes/context_feeder.md` for why this parses `.triage_summary.md`
-instead of duplicating `crash_analyzer`'s cross-referencing, why truncation is an
-honest character budget instead of a silent hard cap, and why
-`generated_jni_stubs.c` is checked in two possible locations.
+Permite tanto modo interactivo rápido (auto-detección) como modo interactivo personalizado
+(ingreso manual de rutas a DMP, Log, .so, Decompilados y Stubs).
+Incluye soporte para copiar directamente al portapapeles (`--copy`), emitir por salida estándar (`--stdout`),
+y limitar estrictamente el presupuesto de caracteres/tokens.
 """
 
 import glob
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 
 from . import i18n
@@ -61,15 +55,65 @@ STRINGS = {
         "en": "[+] AI context exported to: {path}",
         "pt": "[+] Contexto para IA exportado para: {path}",
     },
+    "context_feeder.clipboard_ok": {
+        "es": "[+] ¡Prompt optimizado de crash copiado al portapapeles!",
+        "en": "[+] Optimized crash prompt copied to clipboard!",
+        "pt": "[+] Prompt otimizado de crash copiado para a área de transferência!",
+    },
+    "context_feeder.clipboard_failed": {
+        "es": "[-] No se pudo copiar al portapapeles automáticamente (herramienta del sistema no encontrada).",
+        "en": "[-] Could not copy to clipboard automatically (system tool not found).",
+        "pt": "[-] Não foi possível copiar para a área de transferência automaticamente.",
+    },
     "context_feeder.menu_no_dumps": {
         "es": "[-] No hay ningún crash dump descargado todavía en logs/.",
         "en": "[-] No crash dump has been downloaded yet in logs/.",
         "pt": "[-] Ainda não há nenhum crash dump baixado em logs/.",
     },
     "context_feeder.menu_no_dumps_hint": {
-        "es": "    Usá 'Descargar logs / crash dumps' primero.",
-        "en": "    Use 'Download logs / crash dumps' first.",
-        "pt": "    Use 'Baixar logs / crash dumps' primeiro.",
+        "es": "    Usá 'Descargar logs / crash dumps' primero o ingresa una ruta manual.",
+        "en": "    Use 'Download logs / crash dumps' first or enter a manual path.",
+        "pt": "    Use 'Baixar logs / crash dumps' primeiro ou insira um caminho manual.",
+    },
+    "context_feeder.menu_mode_title": {
+        "es": "Exportar contexto para copiloto IA -- Seleccionar modo",
+        "en": "Export AI Copilot Context -- Select Mode",
+        "pt": "Exportar contexto para copiloto IA -- Selecionar modo",
+    },
+    "context_feeder.mode_auto": {
+        "es": "🚀 Modo Rápido (Auto-detectar dump, logs, .so y decompilados del proyecto)",
+        "en": "🚀 Fast Mode (Auto-detect dump, logs, .so and decompiled project files)",
+        "pt": "🚀 Modo Rápido (Auto-detectar dump, logs, .so e descompilados do projeto)",
+    },
+    "context_feeder.mode_custom": {
+        "es": "⚙️ Modo Personalizado (Especificar / Editar rutas de DMP, Log, .so, Decompilados y Stubs)",
+        "en": "⚙️ Custom Mode (Specify / Edit paths for DMP, Log, .so, Decompiled and Stubs)",
+        "pt": "⚙️ Modo Personalizado (Especificar / Editar caminhos de DMP, Log, .so, Descompilados e Stubs)",
+    },
+    "context_feeder.prompt_dump": {
+        "es": "Ruta al archivo Crash Dump (.psp2dmp / psp2core-*)",
+        "en": "Path to Crash Dump file (.psp2dmp / psp2core-*)",
+        "pt": "Caminho para o arquivo Crash Dump (.psp2dmp / psp2core-*)",
+    },
+    "context_feeder.prompt_log": {
+        "es": "Ruta al archivo Log / Live Log (.log / consola) [opcional, Enter para omitir]",
+        "en": "Path to Log / Live Log file (.log / console) [optional, Enter to skip]",
+        "pt": "Caminho para o arquivo Log / Live Log (.log / console) [opcional, Enter para pular]",
+    },
+    "context_feeder.prompt_so": {
+        "es": "Ruta al archivo binario .so de Android [opcional, Enter para omitir]",
+        "en": "Path to Android .so binary [optional, Enter to skip]",
+        "pt": "Caminho para o binário .so do Android [opcional, Enter para pular]",
+    },
+    "context_feeder.prompt_decompiled": {
+        "es": "Ruta a la carpeta de Decompilados (Ghidra / jadx) [opcional, Enter para omitir]",
+        "en": "Path to Decompiled folder (Ghidra / jadx) [optional, Enter to skip]",
+        "pt": "Caminho para a pasta de Descompilados (Ghidra / jadx) [opcional, Enter para pular]",
+    },
+    "context_feeder.prompt_stubs": {
+        "es": "Ruta a la carpeta de código fuente / Stubs (source/) [opcional, Enter para omitir]",
+        "en": "Path to source code / Stubs folder (source/) [optional, Enter to skip]",
+        "pt": "Caminho para a pasta de código-fonte / Stubs (source/) [opcional, Enter para pular]",
     },
     "context_feeder.menu_pick_dump": {
         "es": "Elegí el crash dump para el que querés armar el contexto",
@@ -82,39 +126,59 @@ STRINGS = {
         "pt": "Formato de saída",
     },
     "context_feeder.format_markdown": {
-        "es": "Markdown (para pegar en un chat de IA o pasarle a 'claude -p')",
-        "en": "Markdown (paste into an AI chat, or hand it to 'claude -p')",
-        "pt": "Markdown (colar em um chat de IA, ou passar para 'claude -p')",
+        "es": "Markdown (para pegar en un chat de IA o pasarle a un agente)",
+        "en": "Markdown (paste into an AI chat or pass to an agent)",
+        "pt": "Markdown (colar em um chat de IA ou passar para um agente)",
     },
     "context_feeder.format_json": {
         "es": "JSON (para otra herramienta que consuma datos estructurados)",
         "en": "JSON (for another tool that wants structured data)",
-        "pt": "JSON (para outra ferramenta que consome dados estruturados)",
+        "pt": "JSON (para outra ferramenta que consome dados estructurados)",
+    },
+    "context_feeder.confirm_view": {
+        "es": "¿Deseas ver el prompt generado en pantalla ahora?",
+        "en": "Do you want to preview the generated prompt on screen now?",
+        "pt": "Deseja visualizar o prompt gerado na tela agora?",
     },
     "context_feeder.doc_title": {
-        "es": "Contexto de crash para asistente de IA",
-        "en": "Crash context for AI assistant",
-        "pt": "Contexto de crash para assistente de IA",
+        "es": "Contexto y Triaje de Crash para Asistente IA (PS Vita Port)",
+        "en": "PS Vita Crash Triage & AI Copilot Context",
+        "pt": "Contexto e Triagem de Crash para Assistente IA (PS Vita Port)",
     },
     "context_feeder.dump_line": {
         "es": "**Dump:** `{path}`",
         "en": "**Dump:** `{path}`",
         "pt": "**Dump:** `{path}`",
     },
+    "context_feeder.diagnostics_heading": {
+        "es": "Diagnóstico de CPU y Causa Raíz",
+        "en": "CPU Diagnostics & Root Cause",
+        "pt": "Diagnóstico de CPU e Causa Raiz",
+    },
     "context_feeder.crash_instruction_heading": {
-        "es": "Instrucción que crasheó",
-        "en": "Crashing instruction",
-        "pt": "Instrução que crashou",
+        "es": "Instrucción del Crash (Ensamblador)",
+        "en": "Crashing Instruction (Disassembly)",
+        "pt": "Instrução do Crash (Desmontagem)",
     },
     "context_feeder.no_crash_instruction": {
         "es": "_No se pudo determinar la instrucción exacta del crash (ver `<dump>.analysis.txt` para el detalle completo)._",
         "en": "_Couldn't determine the exact crashing instruction (see `<dump>.analysis.txt` for the full detail)._",
         "pt": "_Não foi possível determinar a instrução exata do crash (veja `<dump>.analysis.txt` para o detalhe completo)._",
     },
+    "context_feeder.log_heading": {
+        "es": "Log previo al Crash (últimas líneas)",
+        "en": "Log Tail Prior to Crash",
+        "pt": "Log prévio ao Crash (últimas líneas)",
+    },
+    "context_feeder.no_log_found": {
+        "es": "_No se encontró log de consola o live log reciente._",
+        "en": "_No recent console or live log found._",
+        "pt": "_Nenhum log de console ou live log recente encontrado._",
+    },
     "context_feeder.symbols_heading": {
-        "es": "Funciones involucradas, cruzadas contra las 3 fuentes",
-        "en": "Involved functions, cross-referenced against all 3 sources",
-        "pt": "Funções envolvidas, cruzadas com as 3 fontes",
+        "es": "Evidencia de Código Cruzada (Ghidra, JADX y Stubs C)",
+        "en": "Cross-Referenced Code Evidence (Ghidra, JADX & C Stubs)",
+        "pt": "Evidência de Código Cruzada (Ghidra, JADX e Stubs C)",
     },
     "context_feeder.no_symbols_found": {
         "es": "_No se encontraron coincidencias en `decompiled/` ni en el stub JNI actual -- ver `<dump>.triage_summary.md` para el detalle._",
@@ -132,52 +196,46 @@ STRINGS = {
         "pt": "JADX (Java original)",
     },
     "context_feeder.stub_label": {
-        "es": "Stub actual (FalsoJNI/source)",
-        "en": "Current stub (FalsoJNI/source)",
-        "pt": "Stub atual (FalsoJNI/source)",
+        "es": "Stub actual (FalsoJNI / source)",
+        "en": "Current stub (FalsoJNI / source)",
+        "pt": "Stub atual (FalsoJNI / source)",
     },
     "context_feeder.more_not_shown": {
-        "es": "(+{count} coincidencia(s) más no mostradas por el límite de tamaño)",
-        "en": "(+{count} more match(es) not shown due to the size budget)",
-        "pt": "(+{count} correspondência(s) a mais não mostradas pelo limite de tamanho)",
+        "es": "(+{count} coincidencia(s) más no mostradas para ahorrar tokens)",
+        "en": "(+{count} more match(es) omitted to save tokens)",
+        "pt": "(+{count} correspondência(s) omitidas para economizar tokens)",
     },
     "context_feeder.symbols_omitted": {
-        "es": "(+{count} símbolo(s) más no mostrados por el límite de tamaño: {names})",
-        "en": "(+{count} more symbol(s) not shown due to the size budget: {names})",
-        "pt": "(+{count} símbolo(s) a mais não mostrados pelo limite de tamanho: {names})",
+        "es": "(+{count} símbolo(s) adicionales omitidos por presupuesto de tokens: {names})",
+        "en": "(+{count} additional symbol(s) omitted due to token budget: {names})",
+        "pt": "(+{count} símbolo(s) adicionais omitidos por orçamento de tokens: {names})",
     },
     "context_feeder.prompt_heading": {
-        "es": "Pedido al asistente",
-        "en": "Request to the assistant",
-        "pt": "Pedido ao assistente",
+        "es": "Instrucciones para la IA (Pedido Automatizado)",
+        "en": "AI Prompt & Request",
+        "pt": "Instruções para a IA (Pedido Automatizado)",
     },
     "context_feeder.prompt_body": {
         "es": (
-            "Con el contexto de arriba (instrucción del crash, pseudo-C de Ghidra, Java original\n"
-            "de jadx, y el stub JNI actual), proponé un fix concreto. Respondé con:\n\n"
-            "1. Diagnóstico breve (2-3 líneas): qué está fallando y por qué.\n"
-            "2. El fix como un patch unificado (formato `diff`, aplicable con `git apply`) sobre\n"
-            "   el/los archivo(s) de `source/` que corresponda -- no reescribas el archivo entero.\n"
-            "3. Si el fix depende de algo que no está en este contexto (otro archivo, otra parte\n"
-            "   del stub, un dato que hace falta confirmar), decilo explícitamente en vez de inventarlo."
+            "Con el contexto provisto arriba (diagnóstico de CPU, instrucción en crash, últimas líneas de log,\n"
+            "pseudo-C de Ghidra, Java de jadx y stub C actual), proporciona una solución directa:\n\n"
+            "1. **Diagnóstico conciso** (2-3 líneas): Causa exacta de la falla y por qué falló en runtime.\n"
+            "2. **Patch unificado (`git diff`)**: Código corregido listo para aplicar sobre el archivo de `source/` o `loader/` correspondiente.\n"
+            "3. **Detalles no cubiertos**: Si el fix requiere implementar un stub adicional o manejar un caso borde no mostrado, indícalo claramente."
         ),
         "en": (
-            "Using the context above (crash instruction, Ghidra pseudo-C, original jadx Java,\n"
-            "and the current JNI stub), propose a concrete fix. Reply with:\n\n"
-            "1. A short diagnosis (2-3 lines): what's failing and why.\n"
-            "2. The fix as a unified diff (`diff` format, applyable with `git apply`) against\n"
-            "   the relevant `source/` file(s) -- don't rewrite the whole file.\n"
-            "3. If the fix depends on something not in this context (another file, another part\n"
-            "   of the stub, something that needs confirming), say so explicitly instead of guessing."
+            "Using the context above (CPU diagnostics, crash instruction, log tail, Ghidra pseudo-C,\n"
+            "jadx Java, and current C stub), provide a direct fix:\n\n"
+            "1. **Concise diagnosis** (2-3 lines): Exact root cause and why it failed at runtime.\n"
+            "2. **Unified diff patch (`git diff`)**: Fixed code ready to apply onto the relevant file in `source/` or `loader/`.\n"
+            "3. **Missing dependencies**: If the fix requires implementing an extra stub or handling an edge case, state it explicitly."
         ),
         "pt": (
-            "Com o contexto acima (instrução do crash, pseudo-C do Ghidra, Java original do jadx,\n"
-            "e o stub JNI atual), proponha uma correção concreta. Responda com:\n\n"
-            "1. Diagnóstico breve (2-3 linhas): o que está falhando e por quê.\n"
-            "2. A correção como um patch unificado (formato `diff`, aplicável com `git apply`)\n"
-            "   sobre o(s) arquivo(s) de `source/` que corresponda -- não reescreva o arquivo inteiro.\n"
-            "3. Se a correção depender de algo que não está neste contexto (outro arquivo, outra\n"
-            "   parte do stub, um dado que precisa confirmar), diga isso explicitamente em vez de inventar."
+            "Com o contexto acima (diagnóstico de CPU, instrução do crash, log recente, pseudo-C do Ghidra,\n"
+            "Java do jadx e stub C atual), forneça uma solução direta:\n\n"
+            "1. **Diagnóstico conciso** (2-3 linhas): Causa exata da falha e por que falhou em runtime.\n"
+            "2. **Patch unificado (`git diff`)**: Código corrigido pronto para aplicar no arquivo de `source/` ou `loader/`.\n"
+            "3. **Dependências ausentes**: Se o fix precisar de stubs extras, indique explicitamente."
         ),
     },
 }
@@ -185,39 +243,18 @@ i18n.register(STRINGS)
 
 
 # ---------------------------------------------------------------------------
-# Parsing crash_analyzer's already-written <dump>.triage_summary.md
+# Parsing crash_analyzer's outputs
 # ---------------------------------------------------------------------------
 
-# The triage summary has exactly one fenced code block: the crashing
-# instruction (see crash_analyzer._write_triage_summary()). Matched
-# language-independently -- it never depends on the active i18n language
-# matching whatever language the summary was originally written in.
 _CRASH_INSTRUCTION_RE = re.compile(r"```\n(.*?)\n```", re.S)
-
-# "### `symbol_name`" -- one per cross-referenced symbol.
 _SYMBOL_HEADING_RE = re.compile(r"^### `(.+?)`\s*$", re.M)
-
-# Any level-2 or level-3 Markdown heading, used to find where a symbol's
-# section ends (the next heading of either level).
 _NEXT_HEADING_RE = re.compile(r"^#{2,3} ", re.M)
-
-# "- `relative/path:line` -- `code text`" -- one per Ghidra/JADX hit, written
-# by crash_analyzer._write_triage_summary(). Whether a hit is Ghidra or JADX
-# is told apart by the path's extension (.c vs .java), not by the (translated,
-# hence unstable) bold label text above it.
 _HIT_BULLET_RE = re.compile(r"^- `(.+?):(\d+)` -- `(.*)`$", re.M)
 
 
 def _parse_triage_summary(text):
     """!
-    @brief Parse `crash_analyzer._write_triage_summary()`'s Markdown back into
-           plain data, without depending on any translated heading/label text.
-    @param text Full contents of a `<dump_path>.triage_summary.md` file.
-    @return `(crash_instruction, symbols)` -- `crash_instruction` is the
-            crashing instruction line (str) or `None` if the summary has none;
-            `symbols` is a list of `{"symbol", "ghidra_hits", "jadx_hits"}`
-            dicts, each hit list already `(rel_path, line_no, text)` tuples
-            with paths relative to the project dir (as the summary wrote them).
+    @brief Parse `crash_analyzer._write_triage_summary()`'s Markdown back into plain data.
     """
     crash_instruction = None
     m = _CRASH_INSTRUCTION_RE.search(text)
@@ -241,39 +278,140 @@ def _parse_triage_summary(text):
     return crash_instruction, symbols
 
 
+def _parse_analysis_report(dump_path_or_file):
+    """!
+    @brief Extract key CPU registers, thread info, and root-cause lines from `<dump_path>.analysis.txt`.
+    @param dump_path_or_file Path to the `.psp2dmp` file or direct path to `.analysis.txt`.
+    @return dict with `thread`, `stop_reason`, `pc`, `lr`, `sp`, `registers`, and `root_cause`.
+    """
+    analysis_file = dump_path_or_file if str(dump_path_or_file).endswith(".analysis.txt") else f"{dump_path_or_file}.analysis.txt"
+    if not os.path.isfile(analysis_file):
+        return None
+
+    try:
+        content = Path(analysis_file).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    diagnostics = {
+        "thread": None,
+        "stop_reason": None,
+        "pc": None,
+        "lr": None,
+        "sp": None,
+        "key_regs": [],
+        "root_cause": [],
+    }
+
+    in_root_cause = False
+    in_registers = False
+
+    for line in content.splitlines():
+        line_s = line.strip()
+        if "HILO EN CRASH" in line or "CRASHED THREAD" in line or "THREAD EM CRASH" in line:
+            diagnostics["thread"] = line_s
+        elif "Razón de parada:" in line or "Stop reason:" in line or "Motivo da parada:" in line:
+            diagnostics["stop_reason"] = line_s
+        elif line_s.startswith("PC:"):
+            diagnostics["pc"] = line_s
+        elif line_s.startswith("LR:"):
+            diagnostics["lr"] = line_s
+        elif line_s.startswith("SP :") or line_s.startswith("SP:"):
+            diagnostics["sp"] = line_s
+        elif "--- REGISTROS CPU ---" in line or "--- CPU REGISTERS ---" in line:
+            in_registers = True
+            in_root_cause = False
+        elif "DIAGNÓSTICO AUTOMÁTICO DE CAUSA RAÍZ" in line or "AUTOMATIC ROOT CAUSE DIAGNOSIS" in line:
+            in_root_cause = True
+            in_registers = False
+        elif in_registers:
+            if line_s.startswith("R0") or line_s.startswith("R1") or line_s.startswith("R2") or line_s.startswith("R3"):
+                diagnostics["key_regs"].append(line_s)
+            elif "0x00000000" in line_s and line_s.startswith("R"):
+                diagnostics["key_regs"].append(line_s)
+            elif line_s.startswith("---") or line_s.startswith("==="):
+                in_registers = False
+        elif in_root_cause:
+            if line_s.startswith("[*]"):
+                diagnostics["root_cause"].append(line_s)
+            elif line_s.startswith("---") or line_s.startswith("==="):
+                in_root_cause = False
+
+    return diagnostics
+
+
+def _extract_log_tail(project_dir, log_path=None, max_lines=35):
+    """!
+    @brief Extract the last `max_lines` from the most recent log file.
+    @param project_dir Path to the port's project directory.
+    @param log_path Explicit log file path (optional).
+    @param max_lines Maximum lines to return from the tail.
+    @return list of string log lines, or empty list if no log is found.
+    """
+    target_log = None
+    if log_path and os.path.isfile(log_path):
+        target_log = log_path
+    elif project_dir and os.path.isdir(project_dir):
+        candidates = glob.glob(os.path.join(project_dir, "logs", "*.log")) + glob.glob(os.path.join(project_dir, "*.log"))
+        if candidates:
+            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            target_log = candidates[0]
+
+    if not target_log or not os.path.isfile(target_log):
+        return []
+
+    try:
+        with open(target_log, "r", encoding="utf-8", errors="ignore") as f:
+            lines = [l.rstrip("\r\n") for l in f if l.strip()]
+        return lines[-max_lines:]
+    except OSError:
+        return []
+
+
+def _extract_snippet_window(project_dir, rel_path, line_no, radius=3):
+    """!
+    @brief Extract a surrounding code window around `line_no` for rich context.
+    @param project_dir Base directory of the port.
+    @param rel_path Path relative to `project_dir` or absolute.
+    @param line_no Center line number (1-indexed).
+    @param radius Number of lines above and below to include.
+    @return List of formatted lines `// path:line` followed by snippet lines.
+    """
+    full_path = rel_path if os.path.isabs(rel_path) else os.path.join(project_dir, rel_path)
+    if not os.path.isfile(full_path):
+        return []
+
+    try:
+        with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+            all_lines = f.readlines()
+    except OSError:
+        return []
+
+    start_idx = max(0, line_no - 1 - radius)
+    end_idx = min(len(all_lines), line_no + radius)
+
+    snippet = [f"// {rel_path} (lines {start_idx + 1}-{end_idx})"]
+    for idx in range(start_idx, end_idx):
+        cur_line_no = idx + 1
+        prefix = "==> " if cur_line_no == line_no else "    "
+        line_content = all_lines[idx].rstrip("\r\n")
+        snippet.append(f"{prefix}{cur_line_no:4d} | {line_content}")
+    return snippet
+
+
 def _relpath(project_dir, path):
     """!
-    @brief Best-effort `os.path.relpath()`, tolerant of paths that can't be
-           made relative (e.g. a different drive on Windows).
-    @param project_dir Path to the port's project directory.
-    @param path Absolute (or already-relative) path to shorten.
-    @return Relative path string, or `path` unchanged if relativizing fails.
+    @brief Best-effort relative path calculation.
     """
     try:
         return os.path.relpath(path, project_dir)
-    except ValueError:
+    except (ValueError, TypeError):
         return path
 
 
-def _find_stub_matches(project_dir, symbol_name, max_hits=5):
+def _find_stub_matches(project_dir, symbol_name, max_hits=5, stubs_dir=None):
     """!
-    @brief Grep the port's current FalsoJNI stub scaffolding and its own
-           `source/` for `symbol_name` (or the Java method name derived from
-           it, if it looks like a `Java_...` JNI export) -- the third source
-           `crash_analyzer` doesn't cross-reference on its own.
-    @details Checks `generated_jni_stubs.c` in both places
-             `jni_analyzer.generate_jni_stubs()` can write it to
-             (`<project_dir>/source/` if that directory exists, else
-             `<project_dir>/` itself), then every other `*.c` under
-             `<project_dir>/source/` (recursively, skipping macOS `._*` junk).
-    @param project_dir Path to the port's project directory.
-    @param symbol_name Function/symbol name to search for (as parsed from the
-           triage summary -- may be a demangled C++ name, a plain C name, or
-           a `Java_...` JNI export name).
-    @param max_hits Stop after this many matching lines (across all files).
-    @return list of `(file_path, line_no, line_text)` tuples (absolute paths --
-            relativized by the caller, matching `_find_ghidra_matches()`'s
-            and `_find_jadx_matches()`'s tuple shape).
+    @brief Search `source/` and generated stubs for implementations matching `symbol_name`.
     """
     if not symbol_name:
         return []
@@ -285,17 +423,23 @@ def _find_stub_matches(project_dir, symbol_name, max_hits=5):
         search_terms.append(jni_method)
 
     candidate_files = []
-    for stub_path in (
-        os.path.join(project_dir, "source", "generated_jni_stubs.c"),
-        os.path.join(project_dir, "generated_jni_stubs.c"),
-    ):
-        if os.path.isfile(stub_path) and stub_path not in candidate_files:
-            candidate_files.append(stub_path)
-    for c_path in sorted(glob.glob(os.path.join(project_dir, "source", "**", "*.c"), recursive=True)):
-        if os.path.basename(c_path).startswith("._"):
-            continue
-        if c_path not in candidate_files:
-            candidate_files.append(c_path)
+    search_dirs = [stubs_dir] if stubs_dir and os.path.isdir(stubs_dir) else [
+        os.path.join(project_dir, "source"),
+        project_dir
+    ]
+
+    for s_dir in search_dirs:
+        for stub_path in (
+            os.path.join(s_dir, "generated_jni_stubs.c"),
+            os.path.join(s_dir, "source", "generated_jni_stubs.c"),
+        ):
+            if os.path.isfile(stub_path) and stub_path not in candidate_files:
+                candidate_files.append(stub_path)
+        for c_path in sorted(glob.glob(os.path.join(s_dir, "**", "*.c"), recursive=True)):
+            if os.path.basename(c_path).startswith("._"):
+                continue
+            if c_path not in candidate_files:
+                candidate_files.append(c_path)
 
     hits = []
     for c_path in candidate_files:
@@ -312,30 +456,15 @@ def _find_stub_matches(project_dir, symbol_name, max_hits=5):
 
 
 # ---------------------------------------------------------------------------
-# Character budget: trim least-relevant hits first, but always say what got cut
+# Character Budget & Clipboard utilities
 # ---------------------------------------------------------------------------
 
 def _hit_cost(hit):
-    """!
-    @brief Rough character-cost estimate of rendering one `(path, line_no, text)` hit.
-    @param hit `(path, line_no, text)` tuple.
-    @return Estimated character count, including formatting overhead.
-    """
     path, line_no, text = hit
-    return len(path) + len(str(line_no)) + len(text) + 20
+    return len(path) + len(str(line_no)) + len(text) + 30
 
 
 def _fit_hits(hits, budget):
-    """!
-    @brief Keep as many hits (in their existing, already-most-relevant-first
-           order) as fit in `budget`, always keeping at least the first one.
-    @param hits list of `(path, line_no, text)` tuples.
-    @param budget Remaining character budget (may be `<= 0`).
-    @return `(kept_hits, cut_count)`.
-    @note Always keeping the first hit even over a near-zero budget is
-          deliberate: a symbol section with zero evidence shown is far less
-          useful than one slightly over budget with at least one code line.
-    """
     if not hits:
         return [], 0
     kept = [hits[0]]
@@ -352,25 +481,7 @@ def _fit_hits(hits, budget):
 
 
 def _apply_budget(dump_path, crash_instruction, symbol_entries, max_chars):
-    """!
-    @brief Trim `symbol_entries`' hit lists (and, if needed, whole trailing
-           symbols) so the rendered bundle stays around `max_chars`, without
-           ever silently dropping something without saying so.
-    @param dump_path Path to the `.psp2dmp` being analyzed (counts toward the
-           fixed overhead).
-    @param crash_instruction Crash instruction text, or `None`.
-    @param symbol_entries list of `{"symbol", "ghidra_hits", "jadx_hits",
-           "stub_hits"}` dicts, in relevance order (as found on the crashed
-           thread's resolved call chain).
-    @param max_chars Target character budget for the whole bundle.
-    @return `(trimmed_entries, global_notes)` -- `trimmed_entries` is
-            `symbol_entries` with each hit list possibly shortened and an
-            `"omitted"` dict (`{"ghidra": n, "jadx": n, "stub": n}`, only
-            present keys) added; `global_notes` is a list of translated
-            strings describing whole symbols dropped for lack of budget (empty
-            if none were).
-    """
-    fixed_overhead = len(crash_instruction or "") + len(dump_path) + 300
+    fixed_overhead = len(crash_instruction or "") + len(dump_path) + 500
     remaining = max(max_chars - fixed_overhead, 0)
 
     trimmed = []
@@ -410,52 +521,62 @@ def _apply_budget(dump_path, crash_instruction, symbol_entries, max_chars):
     return trimmed, global_notes
 
 
+def copy_to_clipboard(text):
+    """!
+    @brief Copy string to OS clipboard (supports macOS pbcopy, Linux X11/Wayland, Windows clip).
+    @param text String content to copy.
+    @return `True` if successfully copied, `False` otherwise.
+    """
+    for cmd in [
+        ["pbcopy"],
+        ["wl-copy"],
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+        ["clip.exe"],
+    ]:
+        try:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            p.communicate(text.encode("utf-8"))
+            if p.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_context_bundle(project_cfg, dump_path, global_cfg=None, max_chars=12000):
+def build_context_bundle(project_cfg, dump_path, global_cfg=None, max_chars=14000,
+                         log_path=None, log_lines=35, so_path=None, decompiled_dir=None,
+                         analysis_path=None, triage_path=None, stubs_dir=None):
     """!
-    @brief Build the plain-data structure behind `export_context()`: the
-           crash instruction plus, per crashed-chain symbol, its Ghidra/JADX
-           cross-references (parsed from `crash_analyzer`'s
-           `<dump_path>.triage_summary.md`) and the current FalsoJNI stub hits
-           (grepped fresh by this module).
-    @param project_cfg Per-project config dict (needs `_project_dir`).
-    @param dump_path Path to the `.psp2dmp`/`psp2core-*` file.
-    @param global_cfg Global config dict, forwarded to `crash_analyzer.analyze()`
-           if the triage summary doesn't exist yet.
-    @param max_chars Target character budget for the whole bundle; hits
-           beyond it are trimmed (least-relevant first) via `_apply_budget()`,
-           never silently -- see `docs/dev-notes/context_feeder.md`.
-    @return dict with `dump_path`, `crash_instruction` (str or `None`),
-            `symbols` (list of `{"symbol", "ghidra_hits", "jadx_hits",
-            "stub_hits", "omitted"}` dicts), and `truncation_notes` (list of
-            translated strings, empty if nothing was cut) -- or `None` if
-            `dump_path` doesn't exist or its triage summary couldn't be
-            produced/read.
+    @brief Build the complete, surgical crash context data structure.
     """
-    project_dir = project_cfg["_project_dir"]
+    project_dir = project_cfg.get("_project_dir", str(Path(dump_path).parent.parent)) if project_cfg else str(Path(dump_path).parent)
     dump_path = str(dump_path)
-    triage_path = f"{dump_path}.triage_summary.md"
+    target_triage = triage_path if triage_path and os.path.isfile(triage_path) else f"{dump_path}.triage_summary.md"
 
-    if not os.path.isfile(triage_path):
+    if not os.path.isfile(target_triage):
         from . import crash_analyzer
-        crash_analyzer.analyze(project_cfg, dump_path, global_cfg=global_cfg)
+        crash_analyzer.analyze(project_cfg, dump_path, global_cfg=global_cfg, so_path=so_path)
 
-    if not os.path.isfile(triage_path):
+    if not os.path.isfile(target_triage):
         return None
 
     try:
-        text = Path(triage_path).read_text(encoding="utf-8", errors="ignore")
+        text = Path(target_triage).read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return None
 
     crash_instruction, parsed_symbols = _parse_triage_summary(text)
+    diagnostics = _parse_analysis_report(analysis_path or dump_path)
+    log_tail = _extract_log_tail(project_dir, log_path=log_path, max_lines=log_lines)
 
     symbol_entries = []
     for sym in parsed_symbols:
-        stub_hits_raw = _find_stub_matches(project_dir, sym["symbol"])
+        stub_hits_raw = _find_stub_matches(project_dir, sym["symbol"], stubs_dir=stubs_dir)
         stub_hits = [(_relpath(project_dir, p), n, txt) for p, n, txt in stub_hits_raw]
         symbol_entries.append({
             "symbol": sym["symbol"],
@@ -468,41 +589,63 @@ def build_context_bundle(project_cfg, dump_path, global_cfg=None, max_chars=1200
 
     return {
         "dump_path": dump_path,
+        "project_dir": project_dir,
+        "diagnostics": diagnostics,
         "crash_instruction": crash_instruction,
+        "log_tail": log_tail,
         "symbols": trimmed_symbols,
         "truncation_notes": truncation_notes,
     }
 
 
-def _format_hit_block(hits):
-    """!
-    @brief Render a list of `(path, line_no, text)` hits as fenced-code-block body lines.
-    @param hits list of `(path, line_no, text)` tuples.
-    @return list of lines (a `// path:line` comment followed by the code line, per hit).
-    """
-    lines = []
-    for path, line_no, text in hits:
-        lines.append(f"// {path}:{line_no}")
-        lines.append(text)
-    return lines
-
-
 def render_markdown(bundle):
     """!
-    @brief Render a `build_context_bundle()` result as a single Markdown
-           document meant to be pasted directly into an AI chat, or saved and
-           handed to `claude -p`.
-    @param bundle Result of `build_context_bundle()`.
-    @return Markdown document string.
+    @brief Render bundle into a token-optimized, structured Markdown document.
     """
+    project_dir = bundle.get("project_dir", "")
     lines = [f"# {t('context_feeder.doc_title')}", "", t("context_feeder.dump_line", path=bundle["dump_path"]), ""]
 
+    # 1. CPU Diagnostics & Root Cause
+    diag = bundle.get("diagnostics")
+    if diag:
+        lines += [f"## {t('context_feeder.diagnostics_heading')}", ""]
+        if diag.get("thread"):
+            lines.append(f"- **Thread:** `{diag['thread']}`")
+        if diag.get("stop_reason"):
+            lines.append(f"- **Stop Reason:** `{diag['stop_reason']}`")
+        if diag.get("pc"):
+            lines.append(f"- **PC:** `{diag['pc']}`")
+        if diag.get("lr"):
+            lines.append(f"- **LR:** `{diag['lr']}`")
+        if diag.get("sp"):
+            lines.append(f"- **SP:** `{diag['sp']}`")
+        if diag.get("key_regs"):
+            regs_str = " | ".join(f"`{r}`" for r in diag["key_regs"])
+            lines.append(f"- **Registros clave:** {regs_str}")
+        if diag.get("root_cause"):
+            for rc in diag["root_cause"]:
+                lines.append(f"- **Causa:** {rc}")
+        lines.append("")
+
+    # 2. Crashing Instruction
     lines += [f"## {t('context_feeder.crash_instruction_heading')}", ""]
     if bundle.get("crash_instruction"):
-        lines += ["```", bundle["crash_instruction"], "```", ""]
+        lines += ["```arm", bundle["crash_instruction"], "```", ""]
     else:
         lines += [t("context_feeder.no_crash_instruction"), ""]
 
+    # 3. Log Tail
+    log_tail = bundle.get("log_tail")
+    lines += [f"## {t('context_feeder.log_heading')}", ""]
+    if log_tail:
+        lines.append("```log")
+        lines.extend(log_tail)
+        lines.append("```")
+        lines.append("")
+    else:
+        lines += [t("context_feeder.no_log_found"), ""]
+
+    # 4. Cross-referenced Code Evidence
     symbols = bundle.get("symbols") or []
     lines += [f"## {t('context_feeder.symbols_heading')}", ""]
     if not symbols:
@@ -517,7 +660,9 @@ def render_markdown(bundle):
             lines.append(f"**{t('context_feeder.ghidra_label')}**")
             lines.append("")
             lines.append("```c")
-            lines.extend(_format_hit_block(entry["ghidra_hits"]))
+            for path, line_no, _text in entry["ghidra_hits"]:
+                snippet = _extract_snippet_window(project_dir, path, line_no, radius=2)
+                lines.extend(snippet if snippet else [f"// {path}:{line_no}", _text])
             lines.append("```")
             if omitted.get("ghidra"):
                 lines.append(f"_{t('context_feeder.more_not_shown', count=omitted['ghidra'])}_")
@@ -527,7 +672,9 @@ def render_markdown(bundle):
             lines.append(f"**{t('context_feeder.jadx_label')}**")
             lines.append("")
             lines.append("```java")
-            lines.extend(_format_hit_block(entry["jadx_hits"]))
+            for path, line_no, _text in entry["jadx_hits"]:
+                snippet = _extract_snippet_window(project_dir, path, line_no, radius=2)
+                lines.extend(snippet if snippet else [f"// {path}:{line_no}", _text])
             lines.append("```")
             if omitted.get("jadx"):
                 lines.append(f"_{t('context_feeder.more_not_shown', count=omitted['jadx'])}_")
@@ -537,7 +684,9 @@ def render_markdown(bundle):
             lines.append(f"**{t('context_feeder.stub_label')}**")
             lines.append("")
             lines.append("```c")
-            lines.extend(_format_hit_block(entry["stub_hits"]))
+            for path, line_no, _text in entry["stub_hits"]:
+                snippet = _extract_snippet_window(project_dir, path, line_no, radius=2)
+                lines.extend(snippet if snippet else [f"// {path}:{line_no}", _text])
             lines.append("```")
             if omitted.get("stub"):
                 lines.append(f"_{t('context_feeder.more_not_shown', count=omitted['stub'])}_")
@@ -548,33 +697,24 @@ def render_markdown(bundle):
     if bundle.get("truncation_notes"):
         lines.append("")
 
+    # 5. AI Prompt
     lines += [f"## {t('context_feeder.prompt_heading')}", "", t("context_feeder.prompt_body"), ""]
     return "\n".join(lines)
 
 
 def render_json(bundle):
     """!
-    @brief Render a `build_context_bundle()` result as JSON, for tooling that
-           wants structured input instead of Markdown.
-    @param bundle Result of `build_context_bundle()`.
-    @return JSON string (`indent=2`, non-ASCII characters kept literal).
+    @brief Render bundle as JSON for tooling.
     """
     return json.dumps(bundle, indent=2, ensure_ascii=False)
 
 
-def export_context(project_cfg, dump_path, global_cfg=None, fmt="markdown", out_path=None):
+def export_context(project_cfg, dump_path, global_cfg=None, fmt="markdown", out_path=None,
+                   log_path=None, log_lines=35, stdout=False, copy=False, max_chars=14000,
+                   so_path=None, decompiled_dir=None, analysis_path=None, triage_path=None,
+                   stubs_dir=None):
     """!
-    @brief Build the crash context bundle and write it to disk in one call --
-           the function behind both `export_context_cli()` and `export_context_menu()`.
-    @param project_cfg Per-project config dict.
-    @param dump_path Path to the `.psp2dmp`/`psp2core-*` file.
-    @param global_cfg Global config dict, forwarded to `build_context_bundle()`.
-    @param fmt `"markdown"` or `"json"`.
-    @param out_path Explicit output path; defaults to `<dump_path>.context.md`
-           or `<dump_path>.context.json` depending on `fmt`.
-    @return The `Path` written, or `None` on failure (`dump_path` missing, bad
-            `fmt`, the bundle couldn't be built, or the write itself failed --
-            each case prints a `[-]` error first instead of raising).
+    @brief Build the crash context bundle and export/print/copy it.
     """
     dump_path = str(dump_path)
     if not os.path.isfile(dump_path):
@@ -584,12 +724,28 @@ def export_context(project_cfg, dump_path, global_cfg=None, fmt="markdown", out_
         print(f"{C.RED}{t('context_feeder.bad_format', fmt=fmt)}{C.RESET}")
         return None
 
-    bundle = build_context_bundle(project_cfg, dump_path, global_cfg=global_cfg)
+    bundle = build_context_bundle(
+        project_cfg, dump_path, global_cfg=global_cfg,
+        max_chars=max_chars, log_path=log_path, log_lines=log_lines,
+        so_path=so_path, decompiled_dir=decompiled_dir,
+        analysis_path=analysis_path, triage_path=triage_path,
+        stubs_dir=stubs_dir
+    )
     if bundle is None:
         print(f"{C.RED}{t('context_feeder.bundle_failed')}{C.RESET}")
         return None
 
     rendered = render_markdown(bundle) if fmt == "markdown" else render_json(bundle)
+
+    if stdout:
+        print(rendered)
+
+    if copy:
+        if copy_to_clipboard(rendered):
+            print(f"{C.GREEN}{t('context_feeder.clipboard_ok')}{C.RESET}")
+        else:
+            print(f"{C.YELLOW}{t('context_feeder.clipboard_failed')}{C.RESET}")
+
     ext = "context.md" if fmt == "markdown" else "context.json"
     dest = Path(out_path) if out_path else Path(f"{dump_path}.{ext}")
 
@@ -599,49 +755,87 @@ def export_context(project_cfg, dump_path, global_cfg=None, fmt="markdown", out_
         print(f"{C.RED}{t('context_feeder.write_failed', error=e)}{C.RESET}")
         return None
 
-    print(f"{C.GREEN}{t('context_feeder.exported_ok', path=dest)}{C.RESET}")
+    if not stdout:
+        print(f"{C.GREEN}{t('context_feeder.exported_ok', path=dest)}{C.RESET}")
     return dest
 
 
-def export_context_cli(project_cfg, dump_path, global_cfg=None, fmt="markdown", out=None):
+def export_context_cli(project_cfg, dump_path, global_cfg=None, fmt="markdown", out=None,
+                       log_path=None, log_lines=35, stdout=False, copy=False, max_chars=14000,
+                       so_path=None, decompiled_dir=None, analysis_path=None, triage_path=None,
+                       stubs_dir=None):
     """!
-    @brief CLI-shaped wrapper around `export_context()`: same behavior, but
-           returns a process-style exit code instead of a `Path`/`None`.
-    @details Not wired into `cli.py` yet -- meant to back a future
-             `psvita-toolkit export-context <dump_path> [--project PATH]
-             [--format markdown|json] [--out PATH]` subcommand, following the
-             same `_cmd_*(args)` -> handler-in-`_HANDLERS` pattern `cli.py`
-             already uses for `_cmd_analyze()` et al. This function is the
-             handler's body; the subcommand wiring itself is a separate pass.
-    @param project_cfg Per-project config dict.
-    @param dump_path Path to the `.psp2dmp`/`psp2core-*` file.
-    @param global_cfg Global config dict.
-    @param fmt `"markdown"` or `"json"`.
-    @param out Explicit output path (CLI's `--out`); default naming applies if omitted.
-    @return `0` on success, `1` on any failure (`export_context()` already
-            printed the specific `[-]` error).
+    @brief CLI entry point for export-context subcommand.
     """
-    result = export_context(project_cfg, dump_path, global_cfg=global_cfg, fmt=fmt, out_path=out)
+    result = export_context(
+        project_cfg, dump_path, global_cfg=global_cfg, fmt=fmt, out_path=out,
+        log_path=log_path, log_lines=log_lines, stdout=stdout, copy=copy, max_chars=max_chars,
+        so_path=so_path, decompiled_dir=decompiled_dir, analysis_path=analysis_path,
+        triage_path=triage_path, stubs_dir=stubs_dir
+    )
     return 0 if result is not None else 1
 
 
 def export_context_menu(project_cfg, global_cfg):
     """!
-    @brief TUI entry point: pick a locally downloaded crash dump, pick a
-           format, and export its AI context bundle.
-    @param project_cfg Per-project config dict.
-    @param global_cfg Global config dict.
+    @brief Interactive TUI menu entry point for exporting crash context with Fast & Custom modes.
     """
-    from . import ftp_ops
-    dumps = ftp_ops.list_local_history(project_cfg, "dumps")
-    if not dumps:
-        print(f"{C.YELLOW}{t('context_feeder.menu_no_dumps')}{C.RESET}")
-        print(f"{C.DIM}{t('context_feeder.menu_no_dumps_hint')}{C.RESET}")
+    from . import ftp_ops, crash_analyzer
+
+    project_dir = project_cfg.get("_project_dir", "")
+    dumps = ftp_ops.list_local_history(project_cfg, "dumps") if project_cfg else []
+
+    # Choose Mode
+    modes = [
+        ("auto", t("context_feeder.mode_auto")),
+        ("custom", t("context_feeder.mode_custom")),
+    ]
+    mode_choice = tui.select_list(t("context_feeder.menu_mode_title"), modes, label_fn=lambda m: m[1])
+    if mode_choice is None:
         return
 
-    chosen = tui.select_list(t("context_feeder.menu_pick_dump"), dumps, label_fn=lambda p: p.name)
-    if chosen is None:
-        return
+    mode, _label = mode_choice
+
+    # Defaults detection
+    latest_dump = str(dumps[0]) if dumps else ""
+    log_candidates = glob.glob(os.path.join(project_dir, "logs", "*.log")) + glob.glob(os.path.join(project_dir, "*.log")) if project_dir else []
+    if log_candidates:
+        log_candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    default_log = log_candidates[0] if log_candidates else ""
+
+    _auto_elf, auto_so = crash_analyzer._auto_find_files(project_dir, project_cfg.get("build_dir", "build")) if project_dir else (None, None)
+    default_so = auto_so or ""
+    default_decomp = os.path.join(project_dir, "decompiled") if project_dir and os.path.isdir(os.path.join(project_dir, "decompiled")) else ""
+    default_source = os.path.join(project_dir, "source") if project_dir and os.path.isdir(os.path.join(project_dir, "source")) else ""
+
+    dump_path = ""
+    log_path = default_log
+    so_path = default_so
+    decompiled_dir = default_decomp
+    stubs_dir = default_source
+
+    if mode == "auto":
+        if dumps:
+            chosen = tui.select_list(t("context_feeder.menu_pick_dump"), dumps, label_fn=lambda p: p.name)
+            if chosen is None:
+                return
+            dump_path = str(chosen)
+        else:
+            print(f"{C.YELLOW}{t('context_feeder.menu_no_dumps')}{C.RESET}")
+            dump_path = tui.input_path(t("context_feeder.prompt_dump"), must_exist=True)
+            if not dump_path:
+                return
+    else:
+        # Custom Mode: Prompt for each path with prefilled defaults
+        print(f"\n{C.BOLD}{t('context_feeder.mode_custom')}{C.RESET}\n")
+        dump_path = tui.input_path(t("context_feeder.prompt_dump"), default=latest_dump, must_exist=True)
+        if not dump_path:
+            return
+
+        log_path = tui.input_path(t("context_feeder.prompt_log"), default=default_log, allow_blank=True)
+        so_path = tui.input_path(t("context_feeder.prompt_so"), default=default_so, allow_blank=True)
+        decompiled_dir = tui.input_path(t("context_feeder.prompt_decompiled"), default=default_decomp, is_dir=True, allow_blank=True)
+        stubs_dir = tui.input_path(t("context_feeder.prompt_stubs"), default=default_source, is_dir=True, allow_blank=True)
 
     formats = [("markdown", t("context_feeder.format_markdown")), ("json", t("context_feeder.format_json"))]
     fmt_choice = tui.select_list(t("context_feeder.menu_pick_format"), formats, label_fn=lambda f: f[1])
@@ -649,4 +843,18 @@ def export_context_menu(project_cfg, global_cfg):
         return
     fmt, _label = fmt_choice
 
-    export_context(project_cfg, str(chosen), global_cfg=global_cfg, fmt=fmt)
+    out_file = export_context(
+        project_cfg, dump_path, global_cfg=global_cfg, fmt=fmt, copy=True,
+        log_path=log_path, so_path=so_path, decompiled_dir=decompiled_dir, stubs_dir=stubs_dir
+    )
+
+    if out_file and out_file.exists():
+        if tui.confirm(t("context_feeder.confirm_view"), default=False):
+            try:
+                print("\n" + "=" * 80)
+                print(out_file.read_text(encoding="utf-8", errors="ignore"))
+                print("=" * 80 + "\n")
+            except Exception:
+                pass
+        tui.pause()
+

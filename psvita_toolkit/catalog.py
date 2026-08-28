@@ -164,10 +164,11 @@ CATALOG = [
                 "pt": "Gera o script para gdb-multiarch com os símbolos do loader e do .so Android, contra o gdbstub que seu loader já tiver. Pode capturar sozinho o endereço base por UDP.",
             }},
             {"name": "export-context", "tags": [], "desc": {
-                "es": "Empaqueta el crash, el pseudo-código relevante de Ghidra, el Java de jadx y el stub actual en un solo documento -- listo para pegar en un chat de IA.",
-                "en": "Packages the crash, the relevant Ghidra pseudo-code, jadx's Java, and the current stub into one document -- ready to paste into an AI chat.",
-                "pt": "Empacota o crash, o pseudocódigo relevante do Ghidra, o Java do jadx e o stub atual em um único documento -- pronto para colar em um chat de IA.",
+                "es": "Empaqueta quirúrgicamente el crash dump, registros CPU, logs recientes, pseudo-C de Ghidra, Java de jadx y stubs C en un solo documento optimizado en tokens con prompt automatizado para IA.",
+                "en": "Surgically packages the crash dump, CPU registers, recent logs, Ghidra pseudo-C, jadx Java, and C stubs into a single token-optimized document with an automated AI prompt.",
+                "pt": "Empacota cirurgicamente o crash dump, registradores CPU, logs recentes, pseudo-C do Ghidra, Java do jadx e stubs C em um único documento otimizado em tokens com prompt automatizado para IA.",
             }},
+
         ],
     },
     {
