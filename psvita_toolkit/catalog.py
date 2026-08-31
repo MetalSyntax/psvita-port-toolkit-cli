@@ -5,7 +5,7 @@
        `psvita-toolkit tools` output both describe, but from the terminal.
 
 @details
-This toolkit grew to 27 tools across a dozen modules over several rounds of
+This toolkit grew to 28 tools across a dozen modules over several rounds of
 work; the terminal is where a porter actually lives day to day, so the same
 "what does each one actually do" reference that exists as a web artifact
 also needs to be reachable without leaving the TUI/CLI. `CATALOG` is the one
@@ -193,6 +193,11 @@ CATALOG = [
                 "es": "Busca instrucciones ARM sensibles a alineación (ldrd, vld1...) que pasan piolas en Android pero explotan en el Cortex-A9 de Vita, y documenta el riesgo.",
                 "en": "Looks for alignment-sensitive ARM instructions (ldrd, vld1...) that slide by on Android but blow up on Vita's Cortex-A9, and documents the risk.",
                 "pt": "Procura instruções ARM sensíveis a alinhamento (ldrd, vld1...) que passam batido no Android mas explodem no Cortex-A9 da Vita, e documenta o risco.",
+            }},
+            {"name": "disasm", "tags": [], "desc": {
+                "es": "Desensambla una función/dirección real del .so (nm + objdump -Mforce-thumb), la cruza contra su pseudo-C de Ghidra si existe, y exporta todo a un .md listo para pasarle a cualquier IA.",
+                "en": "Disassembles a real function/address from the .so (nm + objdump -Mforce-thumb), cross-references it against its Ghidra pseudo-C if present, and exports it all to a .md ready to hand to any AI.",
+                "pt": "Desmonta uma função/endereço real do .so (nm + objdump -Mforce-thumb), cruza com o pseudo-C do Ghidra se existir, e exporta tudo para um .md pronto para passar a qualquer IA.",
             }},
         ],
     },

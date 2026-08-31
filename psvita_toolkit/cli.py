@@ -164,6 +164,15 @@ def build_parser():
     p_ctx.add_argument("--copy", action="store_true", help="Copy the generated prompt directly to system clipboard.")
     p_ctx.add_argument("--max-chars", type=int, default=14000, help="Character budget limit for token optimization (default: 14000).")
 
+    p_disasm = sub.add_parser("disasm", help="Disassemble a function/address from the .so (cross-referenced against Ghidra) into a file ready for an AI assistant.")
+    p_disasm.add_argument("query", help="Symbol name (mangled or demangled), Ghidra 'FUN_<hex>' label, or raw hex address (e.g. 0xcc128).")
+    p_disasm.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_disasm.add_argument("--so", help="Explicit path to the original Android .so binary.")
+    p_disasm.add_argument("--range", dest="range", help="Override the disassembly window size in bytes (accepts hex, e.g. 0x200).")
+    p_disasm.add_argument("--out", help="Explicit output path (default: decompiled/disasm/<symbol>_<addr>.md).")
+    p_disasm.add_argument("--stdout", action="store_true", help="Also print the generated file to standard output.")
+    p_disasm.add_argument("--copy", action="store_true", help="Copy the generated file directly to system clipboard.")
+
 
 
     p_patch = sub.add_parser("so-patch", help="Scan for telemetry/IAP SDKs and generate neutralization stubs.")
@@ -507,6 +516,37 @@ def _cmd_export_context(args):
 
 
 
+def _cmd_disasm(args):
+    """!
+    @brief `disasm` subcommand handler: disassemble a function/address from the
+           project's .so, cross-referenced against Ghidra pseudo-C when available,
+           into a Markdown file ready to hand to an AI assistant.
+    @param args Parsed CLI args (`query`, `project`, `so`, `range`, `out`, `stdout`, `copy`).
+    @return `1` on missing config/project or resolution failure, else `0`.
+    """
+    from . import disasm
+    global_cfg, err = _load_global_config()
+    if err:
+        return _fail(err)
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+
+    range_override = None
+    if args.range:
+        try:
+            range_override = int(args.range, 0)
+        except ValueError:
+            return _fail(f"Invalid --range value: {args.range}")
+
+    return disasm.export_disasm_cli(
+        project_cfg, args.query, global_cfg=global_cfg, out=args.out, stdout=args.stdout,
+        copy=args.copy, so_path=args.so, range_override=range_override,
+    )
+
+
+
 def _cmd_so_patch(args):
     """!
     @brief `so-patch` subcommand handler: detect telemetry SDKs, optionally
@@ -800,6 +840,7 @@ _HANDLERS = {
     "jni-analyze": _cmd_jni_analyze,
     "logs-live": _cmd_logs_live,
     "export-context": _cmd_export_context,
+    "disasm": _cmd_disasm,
     "so-patch": _cmd_so_patch,
     "sync-shared": _cmd_sync_shared,
     "ecosystem-status": _cmd_ecosystem_status,

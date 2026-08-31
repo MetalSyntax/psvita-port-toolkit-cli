@@ -254,6 +254,7 @@ _TOOLCHAIN_BINARIES = (
     "arm-vita-eabi-gcc",
     "arm-vita-eabi-g++",
     "arm-vita-eabi-objdump",
+    "arm-vita-eabi-nm",
     "arm-vita-eabi-c++filt",
     "arm-vita-eabi-addr2line",
     "arm-vita-eabi-strip",

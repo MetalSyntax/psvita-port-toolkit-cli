@@ -138,7 +138,7 @@ psvita_toolkit/
   crash_analyzer.py   # analizador de .psp2dmp (vita-parse-core)
   utils.py            # limpieza, re-decompilación, tests, símbolos, docs
   gen_docs.py         # generación de skeletons Doxygen y docs/api/ markdown
-  catalog.py          # catálogo de las 27 herramientas (TUI/CLI/dashboard), qué hace cada una
+  catalog.py          # catálogo de las 28 herramientas (TUI/CLI/dashboard), qué hace cada una
   doctor.py           # diagnóstico del entorno (VITASDK, Docker, jadx, CMake/Ninja, paquetes Python)
   cli.py              # modo headless: `psvita-toolkit <subcomando> ...` sin abrir la TUI
   so_patcher.py       # detección + stubs de neutralización de SDKs de telemetría/IAP
@@ -147,6 +147,7 @@ psvita_toolkit/
   dashboard.py        # web dashboard local (logs, estado, crashes, assets, touch mapper, perf)
   ecosystem.py        # vista multi-port y sincronización de componentes compartidos
   context_feeder.py   # exportador de contexto de crash para copilotos de IA
+  disasm.py           # desensamblado ARM/Thumb real de una función/dirección, cruzado contra Ghidra, para copilotos de IA
   gdb_bridge.py       # mapa de símbolos para gdb-multiarch + captura automática de la base del .so (UDP)
   asset_transcoder.py # texturas .rawtex + mipmaps + loader C real (sceGxmTextureInitLinear) + audio .at9 en lote
   perf_telemetry.py   # frame-pacing + GPU sync real (sceGxmFinish) + cores en vivo (UDP, consola real)
@@ -172,6 +173,8 @@ psvita-toolkit init --apk juego.apk --name "Mi Juego"              # crear un po
 psvita-toolkit livearea --project <ruta> --auto <carpeta_imagenes> # LiveArea en lote
 psvita-toolkit clean-junk --project <ruta>                          # limpiar basura de macOS
 psvita-toolkit align-check --project <ruta>                         # riesgos de alineación ARMv7
+psvita-toolkit disasm "CMvObject::GetMapAttrib" --project <ruta>    # desensamblar por nombre (nm + objdump -Mforce-thumb), cruzado contra Ghidra
+psvita-toolkit disasm FUN_000cc128 --project <ruta> --range 0x200    # o por dirección/nombre FUN_<hex> de Ghidra, con ventana explícita
 psvita-toolkit mem-profile --project <ruta>                         # escuchar heap en vivo (consola real)
 psvita-toolkit mem-profile --project <ruta> --gen-hooks              # generar mem_profiler_hooks.c/.h
 psvita-toolkit web --project <ruta>                                  # dashboard local en el navegador
