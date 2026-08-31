@@ -25,6 +25,7 @@ from . import context_feeder
 from . import crash_analyzer
 from . import dashboard
 from . import debugnet_server
+from . import disasm
 from . import doctor
 from . import ecosystem
 from . import ftp_ops
@@ -233,6 +234,11 @@ STRINGS = {
         "en": "Export crash context for AI Copilot (Claude/Gemini/LLMs)",
         "pt": "Exportar contexto de crash para Copiloto IA (Claude/Gemini/LLMs)",
     },
+    "main.utils.disasm": {
+        "es": "Desensamblar función/dirección ARM real (cruzado contra Ghidra, para IA)",
+        "en": "Disassemble a real ARM function/address (cross-referenced against Ghidra, for AI)",
+        "pt": "Desmontar função/endereço ARM real (cruzado com o Ghidra, para IA)",
+    },
     "main.menu.ecosystem": {
         "es": "Ecosistema Multi-Port (familias de motor, sincronización y estado)",
         "en": "Multi-Port Ecosystem (engine families, sync, and status)",
@@ -435,6 +441,7 @@ def _utils_submenu(project_cfg, global_cfg):
         (t("main.utils.catalog"), catalog.print_catalog),
         (t("main.utils.so_patcher"), lambda: so_patcher.patch_menu(project_cfg, global_cfg)),
         (t("main.utils.align_check"), lambda: mem_align_analyzer.alignment_menu(project_cfg, global_cfg)),
+        (t("main.utils.disasm"), lambda: disasm.disasm_menu(project_cfg, global_cfg)),
         (t("main.utils.gdb_bridge"), lambda: gdb_bridge.gdb_bridge_menu(project_cfg, global_cfg)),
         (t("main.utils.asset_transcoder"), lambda: asset_transcoder.transcoder_menu(project_cfg, global_cfg)),
         (t("main.utils.export_context"), lambda: context_feeder.export_context_menu(project_cfg, global_cfg)),

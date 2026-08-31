@@ -26,6 +26,7 @@ import subprocess
 from pathlib import Path
 
 from . import i18n
+from . import tui
 from .i18n import t
 from .tui import C
 from .context_feeder import copy_to_clipboard
@@ -153,6 +154,26 @@ STRINGS = {
         "es": "[!] No se pudo copiar al portapapeles (no se encontró pbcopy/xclip/xsel/clip.exe).",
         "en": "[!] Couldn't copy to clipboard (no pbcopy/xclip/xsel/clip.exe found).",
         "pt": "[!] Não foi possível copiar para a área de transferência (pbcopy/xclip/xsel/clip.exe não encontrados).",
+    },
+    "disasm.menu_title": {
+        "es": "Desensamblado ARM/Thumb real (vs. Ghidra)",
+        "en": "Real ARM/Thumb disassembly (vs. Ghidra)",
+        "pt": "Desmontagem ARM/Thumb real (vs. Ghidra)",
+    },
+    "disasm.menu_prompt_query": {
+        "es": "Símbolo (mangled o demangled), 'FUN_<hex>' de Ghidra, o dirección hex (0x...):",
+        "en": "Symbol (mangled or demangled), Ghidra 'FUN_<hex>', or hex address (0x...):",
+        "pt": "Símbolo (mangled ou demangled), 'FUN_<hex>' do Ghidra, ou endereço hex (0x...):",
+    },
+    "disasm.menu_prompt_range": {
+        "es": "Tamaño de ventana en bytes (Enter para autodetectar):",
+        "en": "Window size in bytes (Enter to auto-detect):",
+        "pt": "Tamanho da janela em bytes (Enter para detectar automaticamente):",
+    },
+    "disasm.menu_invalid_range": {
+        "es": "[!] '{value}' no es un tamaño válido -- se ignora, se autodetecta.",
+        "en": "[!] '{value}' isn't a valid size -- ignoring it, auto-detecting instead.",
+        "pt": "[!] '{value}' não é um tamanho válido -- ignorando, detectando automaticamente.",
     },
 }
 i18n.register(STRINGS)
@@ -582,3 +603,30 @@ def export_disasm_cli(project_cfg, query, global_cfg=None, out=None, stdout=Fals
         so_path=so_path, range_override=range_override,
     )
     return 0 if result is not None else 1
+
+
+def disasm_menu(project_cfg, global_cfg):
+    """!
+    @brief Interactive TUI entry point: prompt for a symbol/address query (and an
+           optional window-size override), disassemble it, and export it as a
+           Markdown file -- copied to the clipboard too, ready to hand to an AI.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict.
+    """
+    tui.clear()
+    tui.print_banner(t("disasm.menu_title"))
+
+    query = input(f"{C.BOLD}{t('disasm.menu_prompt_query')}{C.RESET}\n> ").strip()
+    if not query:
+        return
+
+    range_override = None
+    range_raw = input(f"{C.BOLD}{t('disasm.menu_prompt_range')}{C.RESET} ").strip()
+    if range_raw:
+        try:
+            range_override = int(range_raw, 0)
+        except ValueError:
+            print(f"{C.YELLOW}{t('disasm.menu_invalid_range', value=range_raw)}{C.RESET}")
+
+    export_disasm(project_cfg, query, global_cfg=global_cfg, copy=True, range_override=range_override)
+    tui.pause()
