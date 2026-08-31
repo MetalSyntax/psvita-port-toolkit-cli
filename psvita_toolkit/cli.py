@@ -165,7 +165,9 @@ def build_parser():
     p_ctx.add_argument("--max-chars", type=int, default=14000, help="Character budget limit for token optimization (default: 14000).")
 
     p_disasm = sub.add_parser("disasm", help="Disassemble a function/address from the .so (cross-referenced against Ghidra) into a file ready for an AI assistant.")
-    p_disasm.add_argument("query", help="Symbol name (mangled or demangled), Ghidra 'FUN_<hex>' label, or raw hex address (e.g. 0xcc128).")
+    p_disasm.add_argument("query", nargs="?", default=None,
+                           help="Symbol name (mangled or demangled), Ghidra 'FUN_<hex>' label, or raw hex address (e.g. 0xcc128). "
+                                "Omit entirely to disassemble the whole .so instead (with a symbol index up front).")
     p_disasm.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_disasm.add_argument("--so", help="Explicit path to the original Android .so binary.")
     p_disasm.add_argument("--range", dest="range", help="Override the disassembly window size in bytes (accepts hex, e.g. 0x200).")
@@ -520,7 +522,8 @@ def _cmd_disasm(args):
     """!
     @brief `disasm` subcommand handler: disassemble a function/address from the
            project's .so, cross-referenced against Ghidra pseudo-C when available,
-           into a Markdown file ready to hand to an AI assistant.
+           into a Markdown file ready to hand to an AI assistant. With no `query`,
+           disassembles the entire .so instead (symbol index + full dump).
     @param args Parsed CLI args (`query`, `project`, `so`, `range`, `out`, `stdout`, `copy`).
     @return `1` on missing config/project or resolution failure, else `0`.
     """
@@ -532,6 +535,12 @@ def _cmd_disasm(args):
     if err:
         return _fail(err)
     i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+
+    if not args.query:
+        return disasm.export_disasm_full_cli(
+            project_cfg, global_cfg=global_cfg, out=args.out, stdout=args.stdout,
+            copy=args.copy, so_path=args.so,
+        )
 
     range_override = None
     if args.range:

@@ -161,9 +161,9 @@ STRINGS = {
         "pt": "Desmontagem ARM/Thumb real (vs. Ghidra)",
     },
     "disasm.menu_prompt_query": {
-        "es": "Símbolo (mangled o demangled), 'FUN_<hex>' de Ghidra, o dirección hex (0x...):",
-        "en": "Symbol (mangled or demangled), Ghidra 'FUN_<hex>', or hex address (0x...):",
-        "pt": "Símbolo (mangled ou demangled), 'FUN_<hex>' do Ghidra, ou endereço hex (0x...):",
+        "es": "Símbolo (mangled o demangled), 'FUN_<hex>' de Ghidra, o dirección hex (0x...). Dejalo en blanco para desensamblar el .so completo:",
+        "en": "Symbol (mangled or demangled), Ghidra 'FUN_<hex>', or hex address (0x...). Leave blank to disassemble the whole .so:",
+        "pt": "Símbolo (mangled ou demangled), 'FUN_<hex>' do Ghidra, ou endereço hex (0x...). Deixe em branco para desmontar o .so inteiro:",
     },
     "disasm.menu_prompt_range": {
         "es": "Tamaño de ventana en bytes (Enter para autodetectar):",
@@ -174,6 +174,26 @@ STRINGS = {
         "es": "[!] '{value}' no es un tamaño válido -- se ignora, se autodetecta.",
         "en": "[!] '{value}' isn't a valid size -- ignoring it, auto-detecting instead.",
         "pt": "[!] '{value}' não é um tamanho válido -- ignorando, detectando automaticamente.",
+    },
+    "disasm.menu_full_confirm": {
+        "es": "No escribiste ningún símbolo/dirección -- ¿desensamblar el .so COMPLETO en su lugar? Puede tardar un momento y generar un archivo de varios MB.",
+        "en": "No symbol/address entered -- disassemble the WHOLE .so instead? This can take a moment and produce a file several MB in size.",
+        "pt": "Nenhum símbolo/endereço informado -- desmontar o .so INTEIRO em vez disso? Pode demorar um pouco e gerar um arquivo de vários MB.",
+    },
+    "disasm.full_index_heading": {
+        "es": "Índice de símbolos (dirección -> nombre)",
+        "en": "Symbol index (address -> name)",
+        "pt": "Índice de símbolos (endereço -> nome)",
+    },
+    "disasm.full_size_note": {
+        "es": "{size} de desensamblado crudo -- demasiado grande para pegarlo entero en la mayoría de los chats de IA. Usá el índice de abajo (o buscá/`grep`) para encontrar la dirección o el nombre que te interesa, y después corré `disasm <símbolo-o-dirección>` para sacar un extracto acotado, listo para IA.",
+        "en": "{size} of raw disassembly -- too large to paste whole into most AI chats. Use the index below (or grep) to find the address/name you need, then run `disasm <symbol-or-address>` for a focused, AI-ready excerpt.",
+        "pt": "{size} de desmontagem bruta -- grande demais para colar inteiro na maioria dos chats de IA. Use o índice abaixo (ou grep) para achar o endereço/nome que precisa, depois rode `disasm <símbolo-ou-endereço>` para um trecho focado, pronto para IA.",
+    },
+    "disasm.full_no_clipboard": {
+        "es": "[i] El desensamblado completo es demasiado grande para copiarlo al portapapeles -- abrí el archivo exportado directamente.",
+        "en": "[i] The full disassembly is too large to copy to the clipboard -- open the exported file directly.",
+        "pt": "[i] A desmontagem completa é grande demais para copiar para a área de transferência -- abra o arquivo exportado diretamente.",
     },
 }
 i18n.register(STRINGS)
@@ -605,6 +625,148 @@ def export_disasm_cli(project_cfg, query, global_cfg=None, out=None, stdout=Fals
     return 0 if result is not None else 1
 
 
+def _human_size(num_bytes):
+    """!
+    @brief Format a byte count as a human-readable size (B/KB/MB/GB).
+    @param num_bytes Size in bytes.
+    @return Formatted string, e.g. `"18.2 MB"`.
+    """
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def build_full_disasm_bundle(project_cfg, global_cfg=None, so_path=None):
+    """!
+    @brief Disassemble the entire `.text` section of the `.so`, with a symbol
+           index up front -- for when you don't know which function you're
+           looking for yet and want to browse/grep the whole binary.
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict (used to locate VITASDK's `bin/`).
+    @param so_path Explicit `.so` path override.
+    @return dict; either `{"error": "..."}` or the full bundle for
+            `render_markdown_full()`.
+    """
+    project_dir = Path(project_cfg["_project_dir"])
+    _ensure_vitasdk_path(global_cfg)
+
+    so_path = _find_so(project_dir, project_cfg, so_path)
+    if not so_path:
+        return {"error": "so_not_found"}
+
+    objdump = shutil.which("arm-vita-eabi-objdump")
+    if not objdump:
+        return {"error": "objdump_missing"}
+
+    r = subprocess.run([objdump, "-d", "-Mforce-thumb", "-C", so_path], capture_output=True, text=True)
+    if r.returncode != 0:
+        return {"error": "objdump_failed", "detail": (r.stderr or "unknown objdump error").strip()}
+
+    lines, in_text = [], False
+    for line in r.stdout.splitlines():
+        if "Disassembly of section" in line:
+            in_text = True
+        if in_text:
+            lines.append(line)
+    disasm_text = "\n".join(lines).strip("\n")
+
+    symbols = _load_full_symbols(so_path) or []
+    index_lines = [f"0x{addr:08x}  {demangled}" for addr, _size, _raw, demangled in symbols]
+
+    return {
+        "project": project_cfg.get("project_name") or project_cfg.get("slug"),
+        "so_path": str(so_path),
+        "disasm_text": disasm_text,
+        "symbol_index": index_lines,
+        "byte_size": len(disasm_text.encode("utf-8")),
+    }
+
+
+def render_markdown_full(bundle):
+    """!
+    @brief Render a resolved full-binary bundle (from `build_full_disasm_bundle()`)
+           as a single Markdown document: metadata, a symbol index, then the
+           complete disassembly.
+    @param bundle Bundle dict (must not carry an `"error"` key).
+    @return Markdown text.
+    """
+    so_name = os.path.basename(bundle["so_path"])
+    lines = [f"# Full disassembly -- `{so_name}`", ""]
+    lines.append(f"- **{t('disasm.field_project')}**: {bundle.get('project') or '?'}")
+    lines.append(f"- **{t('disasm.field_so')}**: `{bundle['so_path']}`")
+    lines.append("")
+    lines.append(t("disasm.full_size_note", size=_human_size(bundle["byte_size"])))
+    lines.append("")
+
+    if bundle["symbol_index"]:
+        lines.append(f"## {t('disasm.full_index_heading')}")
+        lines.append("```text")
+        lines.extend(bundle["symbol_index"])
+        lines.append("```")
+        lines.append("")
+
+    lines.append(f"## {t('disasm.arm_heading')}")
+    lines.append("```text")
+    lines.append(bundle["disasm_text"])
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def export_disasm_full(project_cfg, global_cfg=None, out_path=None, stdout=False, copy=False, so_path=None):
+    """!
+    @brief Build the full-binary disassembly bundle and export/print it (copying
+           to the clipboard is skipped -- it's routinely tens of MB).
+    @param project_cfg Per-project config dict.
+    @param global_cfg Global config dict.
+    @param out_path Explicit output path (default: `decompiled/disasm/full_<so>.md`).
+    @param stdout Also print the rendered Markdown to standard output.
+    @param copy If `True`, prints a note explaining why clipboard copy was skipped.
+    @param so_path Explicit `.so` path override.
+    @return `Path` written to, or `None` on any failure.
+    """
+    bundle = build_full_disasm_bundle(project_cfg, global_cfg=global_cfg, so_path=so_path)
+    if bundle.get("error"):
+        _print_error(bundle)
+        return None
+
+    rendered = render_markdown_full(bundle)
+
+    if stdout:
+        print(rendered)
+    if copy:
+        print(f"{C.YELLOW}{t('disasm.full_no_clipboard')}{C.RESET}")
+
+    project_dir = Path(project_cfg["_project_dir"])
+    safe_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', os.path.basename(bundle["so_path"])).strip('_') or "so"
+    default_path = project_dir / "decompiled" / "disasm" / f"full_{safe_name}.md"
+    dest = Path(out_path) if out_path else default_path
+
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(rendered, encoding="utf-8")
+    except OSError as e:
+        print(f"{C.RED}{t('disasm.write_failed', error=e)}{C.RESET}")
+        return None
+
+    if not stdout:
+        print(f"{C.GREEN}{t('disasm.exported_ok', path=dest)}{C.RESET}")
+    return dest
+
+
+def export_disasm_full_cli(project_cfg, global_cfg=None, out=None, stdout=False, copy=False, so_path=None):
+    """!
+    @brief CLI entry point for `disasm` invoked with no query (full-binary mode).
+    @return `0` on success, `1` on any failure.
+    """
+    result = export_disasm_full(
+        project_cfg, global_cfg=global_cfg, out_path=out, stdout=stdout, copy=copy, so_path=so_path,
+    )
+    return 0 if result is not None else 1
+
+
 def disasm_menu(project_cfg, global_cfg):
     """!
     @brief Interactive TUI entry point: prompt for a symbol/address query (and an
@@ -618,6 +780,10 @@ def disasm_menu(project_cfg, global_cfg):
 
     query = input(f"{C.BOLD}{t('disasm.menu_prompt_query')}{C.RESET}\n> ").strip()
     if not query:
+        if not tui.confirm(t("disasm.menu_full_confirm"), default=False):
+            return
+        export_disasm_full(project_cfg, global_cfg=global_cfg, copy=True)
+        tui.pause()
         return
 
     range_override = None
