@@ -16,6 +16,7 @@ from pathlib import Path
 from . import catalog
 from . import config as cfgmod
 from . import doctor
+from . import error_codes
 from . import tui
 from .tui import C
 from . import i18n
@@ -325,6 +326,7 @@ def select_or_create_project(global_cfg):
     items.append((t("project.menu_create_new"), crear_nuevo))
     items.append((t("project.menu_global_config"), lambda: _edit_global_config(global_cfg)))
     items.append((t("project.menu_doctor"), lambda: doctor.doctor_menu(global_cfg)))
+    items.append((t("errcode.menu_label"), lambda: error_codes.menu_lookup(global_cfg)))
     items.append((t("project.menu_catalog"), catalog.print_catalog))
     items.append((f"{C.RED}{t('project.menu_exit')}{C.RESET}", None))
 

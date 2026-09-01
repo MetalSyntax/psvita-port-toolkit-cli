@@ -78,6 +78,11 @@ CATALOG = [
                 "en": "Checks that VITASDK, Docker, jadx, CMake/Ninja, gdb-multiarch, glslangValidator/spirv-cross, and the Python packages are installed, and says exactly what's missing and how to install it.",
                 "pt": "Verifica se VITASDK, Docker, jadx, CMake/Ninja, gdb-multiarch, glslangValidator/spirv-cross e os pacotes Python estão instalados, e diz exatamente o que falta e como instalar.",
             }},
+            {"name": "errcode", "tags": [], "desc": {
+                "es": "Traduce un código de error de PS Vita (C1-2764-9, 0x8001001c, o el nombre del símbolo) a una explicación en lenguaje humano -- siempre en español, inglés y portugués a la vez, con causa y fix cuando el código es de los comunes.",
+                "en": "Translates a PS Vita error code (C1-2764-9, 0x8001001c, or the symbol name) into a human-language explanation -- always in Spanish, English, and Portuguese at once, with cause and fix for the common codes.",
+                "pt": "Traduz um código de erro do PS Vita (C1-2764-9, 0x8001001c, ou o nome do símbolo) em uma explicação em linguagem humana -- sempre em espanhol, inglês e português ao mesmo tempo, com causa e correção para os códigos comuns.",
+            }},
             {"name": "init", "tags": [], "desc": {
                 "es": "Toma un .apk de Android, detecta ABI y GLES, decompila con jadx + Ghidra, y deja un repo git nuevo con PORTING_PLAN.md listo para empezar a portear.",
                 "en": "Takes an Android .apk, detects ABI and GLES, decompiles with jadx + Ghidra, and leaves a fresh git repo with PORTING_PLAN.md ready to start porting.",

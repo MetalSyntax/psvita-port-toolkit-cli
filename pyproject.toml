@@ -16,3 +16,6 @@ psvita-toolkit = "psvita_toolkit.__main__:run"
 
 [tool.setuptools]
 packages = ["psvita_toolkit"]
+
+[tool.setuptools.package-data]
+psvita_toolkit = ["data/*.txt"]
