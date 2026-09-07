@@ -657,6 +657,8 @@ def _find_ghidra_matches(project_dir, symbol_name, max_hits=5):
         return []
     hits = []
     for c_path in sorted(glob.glob(os.path.join(project_dir, "decompiled", "*", "ghidra", "*.c"))):
+        if os.path.basename(c_path).startswith("._"):
+            continue
         try:
             with open(c_path, "r", encoding="utf-8", errors="ignore") as f:
                 for i, line in enumerate(f, 1):
@@ -704,6 +706,8 @@ def _find_jadx_matches(project_dir, method_name, max_hits=5):
     hits = []
     pattern = os.path.join(project_dir, "decompiled", "apk_jadx", "sources", "**", "*.java")
     for java_path in sorted(glob.glob(pattern, recursive=True)):
+        if os.path.basename(java_path).startswith("._"):
+            continue
         try:
             with open(java_path, "r", encoding="utf-8", errors="ignore") as f:
                 for i, line in enumerate(f, 1):

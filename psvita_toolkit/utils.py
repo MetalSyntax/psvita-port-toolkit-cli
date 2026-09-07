@@ -389,6 +389,8 @@ def decompile_all(project_cfg, global_cfg):
         return
 
     for so_file in lib_dir.rglob("*.so"):
+        if so_file.name.startswith("._"):
+            continue
         abi = so_file.parent.name
         so_out = decompiled_dir / f"{so_file.stem}_{abi}" / "ghidra"
         so_out.mkdir(parents=True, exist_ok=True)

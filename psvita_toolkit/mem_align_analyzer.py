@@ -151,7 +151,8 @@ def _find_primary_so(project_dir):
     @param project_dir Path to the port's project directory.
     @return Path string to the most likely `.so`, or `None` if none found.
     """
-    candidates = glob.glob(os.path.join(str(project_dir), "**", "*.so"), recursive=True)
+    candidates = [p for p in glob.glob(os.path.join(str(project_dir), "**", "*.so"), recursive=True)
+                  if not os.path.basename(p).startswith("._")]
     candidates.sort(key=lambda x: 0 if ("libgame" in x or "libmain" in x) else 1)
     return candidates[0] if candidates else None
 
@@ -246,6 +247,8 @@ def scan_struct_packing(project_dir):
     project_dir = Path(project_dir)
     hits = []
     for c_path_str in sorted(glob.glob(os.path.join(str(project_dir), "decompiled", "*", "ghidra", "*.c"))):
+        if os.path.basename(c_path_str).startswith("._"):
+            continue
         c_path = Path(c_path_str)
         try:
             lines = c_path.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -280,7 +283,8 @@ def _has_ghidra_output(project_dir):
     @param project_dir Path to the port's project directory.
     @return `True` if at least one `decompiled/*/ghidra/*.c` file exists.
     """
-    return bool(glob.glob(os.path.join(str(project_dir), "decompiled", "*", "ghidra", "*.c")))
+    return any(not os.path.basename(p).startswith("._")
+               for p in glob.glob(os.path.join(str(project_dir), "decompiled", "*", "ghidra", "*.c")))
 
 
 # ---------------------------------------------------------------------------

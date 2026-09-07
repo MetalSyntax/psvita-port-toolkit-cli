@@ -62,6 +62,26 @@ STRINGS = {
         "en": "[!] Multiple symbols matched -- be more specific or use the exact address:",
         "pt": "[!] Vários símbolos correspondem -- seja mais específico ou use o endereço exato:",
     },
+    "disasm.so_ambiguous": {
+        "es": "[!] Hay varios .so en el proyecto -- pasa --so con la ruta exacta del que querés desensamblar:",
+        "en": "[!] Multiple .so files found in the project -- pass --so with the exact path of the one you want to disassemble:",
+        "pt": "[!] Vários .so encontrados no projeto -- passe --so com o caminho exato do que você quer desmontar:",
+    },
+    "disasm.menu_so_title": {
+        "es": "Elegí el .so a desensamblar",
+        "en": "Choose the .so to disassemble",
+        "pt": "Escolha o .so para desmontar",
+    },
+    "disasm.menu_so_custom": {
+        "es": "Escribir otra ruta...",
+        "en": "Type a different path...",
+        "pt": "Digitar outro caminho...",
+    },
+    "disasm.menu_so_prompt_path": {
+        "es": "Ruta al .so:",
+        "en": "Path to the .so:",
+        "pt": "Caminho para o .so:",
+    },
     "disasm.field_project": {"es": "Proyecto", "en": "Project", "pt": "Projeto"},
     "disasm.field_so": {"es": ".so analizado", "en": "Analyzed .so", "pt": ".so analisado"},
     "disasm.field_address": {"es": "Dirección", "en": "Address", "pt": "Endereço"},
@@ -214,32 +234,49 @@ def _ensure_vitasdk_path(global_cfg):
         os.environ["PATH"] = f"{vitasdk_bin}:{os.environ.get('PATH', '')}"
 
 
+def list_so_candidates(project_dir):
+    """!
+    @brief All `.so` files found under the project directory, sorted with the
+           most-likely main game/engine library first.
+    @param project_dir Path to the port's project directory.
+    @return Sorted list of path strings (possibly empty).
+    """
+    candidates = [p for p in glob.glob(os.path.join(str(project_dir), "**", "*.so"), recursive=True)
+                  if not os.path.basename(p).startswith("._")]
+    candidates.sort(key=lambda x: (0 if ("libgame" in x.lower() or "libmain" in x.lower()) else 1, x))
+    return candidates
+
+
 def _find_so(project_dir, project_cfg=None, so_path=None):
     """!
     @brief Resolve which Android `.so` to disassemble: explicit path, then the
-           project's configured `main_so`, then the largest/most-likely `.so` found
-           under the project directory.
+           project's configured `main_so`, then whatever's found under the project
+           directory -- if more than one `.so` exists and neither of the above
+           disambiguated it, this is surfaced as an `"ambiguous"` error instead of
+           silently guessing, since guessing wrong means silently disassembling the
+           wrong binary.
     @param project_dir Path to the port's project directory.
     @param project_cfg Optional project config dict.
     @param so_path Explicit override path.
-    @return Path string, or `None` if nothing was found.
+    @return `{"path": "..."}`, `{"error": "not_found"}`, or `{"error": "ambiguous",
+            "candidates": [...]}`.
     """
     if so_path:
-        return so_path if os.path.isfile(so_path) else None
+        return {"path": so_path} if os.path.isfile(so_path) else {"error": "not_found"}
 
     if project_cfg:
         configured = project_cfg.get("main_so") or project_cfg.get("so_name") or project_cfg.get("so_file")
         if configured:
             full = os.path.join(str(project_dir), configured) if not os.path.isabs(configured) else configured
             if os.path.isfile(full):
-                return full
+                return {"path": full}
 
-    candidates = [p for p in glob.glob(os.path.join(str(project_dir), "**", "*.so"), recursive=True)
-                  if not os.path.basename(p).startswith("._")]
+    candidates = list_so_candidates(project_dir)
     if not candidates:
-        return None
-    candidates.sort(key=lambda x: 0 if ("libgame" in x.lower() or "libmain" in x.lower()) else 1)
-    return candidates[0]
+        return {"error": "not_found"}
+    if len(candidates) == 1:
+        return {"path": candidates[0]}
+    return {"error": "ambiguous", "candidates": candidates}
 
 
 def _parse_address_literal(query):
@@ -411,7 +448,8 @@ def _find_ghidra_snippet(project_dir, terms, max_lines=600):
     @return `(relative_path, start_line_1indexed, snippet_text)`, or
             `(None, None, None)` if nothing matched.
     """
-    c_files = sorted(glob.glob(os.path.join(str(project_dir), "decompiled", "*", "ghidra", "*.c")))
+    c_files = sorted(p for p in glob.glob(os.path.join(str(project_dir), "decompiled", "*", "ghidra", "*.c"))
+                      if not os.path.basename(p).startswith("._"))
     for term in terms:
         if not term:
             continue
@@ -469,9 +507,12 @@ def build_disasm_bundle(project_cfg, query, global_cfg=None, so_path=None, range
     project_dir = Path(project_cfg["_project_dir"])
     _ensure_vitasdk_path(global_cfg)
 
-    so_path = _find_so(project_dir, project_cfg, so_path)
-    if not so_path:
+    so_result = _find_so(project_dir, project_cfg, so_path)
+    if so_result.get("error") == "not_found":
         return {"error": "so_not_found"}
+    if so_result.get("error") == "ambiguous":
+        return {"error": "so_ambiguous", "candidates": so_result["candidates"]}
+    so_path = so_result["path"]
 
     resolved = resolve_symbol(so_path, query, range_override)
     if resolved.get("error"):
@@ -546,6 +587,10 @@ def _print_error(bundle):
     err = bundle.get("error")
     if err == "so_not_found":
         print(f"{C.RED}{t('disasm.so_not_found')}{C.RESET}")
+    elif err == "so_ambiguous":
+        print(f"{C.YELLOW}{t('disasm.so_ambiguous')}{C.RESET}")
+        for p in bundle["candidates"]:
+            print(f"    {p}")
     elif err == "nm_missing":
         print(f"{C.RED}{t('disasm.nm_missing')}{C.RESET}")
     elif err == "objdump_missing":
@@ -653,9 +698,12 @@ def build_full_disasm_bundle(project_cfg, global_cfg=None, so_path=None):
     project_dir = Path(project_cfg["_project_dir"])
     _ensure_vitasdk_path(global_cfg)
 
-    so_path = _find_so(project_dir, project_cfg, so_path)
-    if not so_path:
+    so_result = _find_so(project_dir, project_cfg, so_path)
+    if so_result.get("error") == "not_found":
         return {"error": "so_not_found"}
+    if so_result.get("error") == "ambiguous":
+        return {"error": "so_ambiguous", "candidates": so_result["candidates"]}
+    so_path = so_result["path"]
 
     objdump = shutil.which("arm-vita-eabi-objdump")
     if not objdump:
@@ -767,9 +815,36 @@ def export_disasm_full_cli(project_cfg, global_cfg=None, out=None, stdout=False,
     return 0 if result is not None else 1
 
 
+def _menu_pick_so(project_cfg):
+    """!
+    @brief If the project has more than one `.so`, ask which one to disassemble
+           (or let the user type an arbitrary path) instead of silently guessing.
+    @param project_cfg Per-project config dict.
+    @return Explicit `.so` path to force downstream (`None` means: let
+            `_find_so()` resolve it on its own -- zero or one candidate found).
+    """
+    project_dir = Path(project_cfg["_project_dir"])
+    candidates = list_so_candidates(project_dir)
+    if len(candidates) <= 1:
+        return None
+
+    labels = [os.path.relpath(p, project_dir) for p in candidates]
+    entries = list(candidates) + ["__custom__"]
+    label_fn = {p: lbl for p, lbl in zip(candidates, labels)}
+    label_fn["__custom__"] = t("disasm.menu_so_custom")
+
+    chosen = tui.select_list(t("disasm.menu_so_title"), entries, label_fn=lambda e: label_fn[e])
+    if chosen is None:
+        return None
+    if chosen == "__custom__":
+        return tui.input_path(t("disasm.menu_so_prompt_path"), must_exist=True)
+    return chosen
+
+
 def disasm_menu(project_cfg, global_cfg):
     """!
-    @brief Interactive TUI entry point: prompt for a symbol/address query (and an
+    @brief Interactive TUI entry point: pick which `.so` to target (only asked when
+           more than one is found), prompt for a symbol/address query (and an
            optional window-size override), disassemble it, and export it as a
            Markdown file -- copied to the clipboard too, ready to hand to an AI.
     @param project_cfg Per-project config dict.
@@ -778,11 +853,13 @@ def disasm_menu(project_cfg, global_cfg):
     tui.clear()
     tui.print_banner(t("disasm.menu_title"))
 
+    so_path = _menu_pick_so(project_cfg)
+
     query = input(f"{C.BOLD}{t('disasm.menu_prompt_query')}{C.RESET}\n> ").strip()
     if not query:
         if not tui.confirm(t("disasm.menu_full_confirm"), default=False):
             return
-        export_disasm_full(project_cfg, global_cfg=global_cfg, copy=True)
+        export_disasm_full(project_cfg, global_cfg=global_cfg, copy=True, so_path=so_path)
         tui.pause()
         return
 
@@ -794,5 +871,6 @@ def disasm_menu(project_cfg, global_cfg):
         except ValueError:
             print(f"{C.YELLOW}{t('disasm.menu_invalid_range', value=range_raw)}{C.RESET}")
 
-    export_disasm(project_cfg, query, global_cfg=global_cfg, copy=True, range_override=range_override)
+    export_disasm(project_cfg, query, global_cfg=global_cfg, copy=True, range_override=range_override,
+                  so_path=so_path)
     tui.pause()
