@@ -105,7 +105,7 @@ def watch_and_upload_shaders(project_cfg, global_cfg, poll_interval=DEFAULT_POLL
     cg_dir = Path(project_cfg["_project_dir"]) / "assets" / "cg"
     vita_cg_dir = project_cfg.get("vita_cg_dir")
 
-    ftp = ftp_ops._connect(project_cfg, global_cfg)
+    ftp = ftp_ops._connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         print(f"{C.RED}{t('shader_live_reload.connect_failed')}{C.RESET}")
         return
@@ -135,7 +135,7 @@ def watch_and_upload_shaders(project_cfg, global_cfg, poll_interval=DEFAULT_POLL
                         continue
 
                 if not ftp_ops._keepalive(ftp):
-                    ftp = ftp_ops._connect(project_cfg, global_cfg)
+                    ftp = ftp_ops._connect_with_retry(project_cfg, global_cfg)
                     if not ftp:
                         print(f"{C.RED}{t('shader_live_reload.reconnect_failed')}{C.RESET}")
                         return

@@ -530,6 +530,16 @@ STRINGS = {
         "en": "This port is managed with **psvita-port-toolkit** (standalone, outside this repo). From the\ntoolkit: `Continue with an existing port` → pick this folder (it already has `.psvita-toolkit.json`).",
         "pt": "Este port é gerenciado com **psvita-port-toolkit** (standalone, fora deste repo). A partir da\nferramenta: `Continuar com um port existente` → escolha esta pasta (já tem `.psvita-toolkit.json`).",
     },
+    "init_port.plan_section6_title": {
+        "es": "6. Estándar de logs en consola",
+        "en": "6. On-console log standard",
+        "pt": "6. Padrão de logs no console",
+    },
+    "init_port.plan_log_text": {
+        "es": "El log del juego vive en `<DATA_PATH>logs/<slug>_NNN.log` (`<slug>` = {slug}), incremental de\n001 a 999 con `next.idx` (nunca `log_<timestamp>.txt`, nunca base 000, nunca ruta hardcodeada:\nusar `DATA_PATH`). La subida FTP crea `logs/` y `saves/` en la consola aunque estén vacíos.\nComandos del toolkit (sin IA, deterministas): `psvita-toolkit log-standard --fix-dirs` (audita\ny crea los dirs), `psvita-toolkit log-trace --ensure-flag` (inyecta trazas `[TRACE] >> f()` por\nfunción bajo `#ifdef PORT_TRACE`; compilar con `-DPORT_TRACE=ON` para debug, `OFF` para\nproducción, o `psvita-toolkit log-trace --remove` para quitarlas del árbol).",
+        "en": "The game log lives at `<DATA_PATH>logs/<slug>_NNN.log` (`<slug>` = {slug}), incrementing\n001 to 999 with `next.idx` (never `log_<timestamp>.txt`, never 000-based, never a hardcoded\npath: use `DATA_PATH`). The FTP upload creates `logs/` and `saves/` on the console even when\nempty. Toolkit commands (no AI, deterministic): `psvita-toolkit log-standard --fix-dirs` (audits\nand creates the dirs), `psvita-toolkit log-trace --ensure-flag` (injects per-function\n`[TRACE] >> f()` traces under `#ifdef PORT_TRACE`; build with `-DPORT_TRACE=ON` for debug,\n`OFF` for production, or `psvita-toolkit log-trace --remove` to strip them from the tree).",
+        "pt": "O log do jogo fica em `<DATA_PATH>logs/<slug>_NNN.log` (`<slug>` = {slug}), incremental de\n001 a 999 com `next.idx` (nunca `log_<timestamp>.txt`, nunca base 000, nunca caminho hardcoded:\nusar `DATA_PATH`). O upload FTP cria `logs/` e `saves/` no console mesmo vazios.\nComandos do toolkit (sem IA, determinísticos): `psvita-toolkit log-standard --fix-dirs` (audita\ne cria os dirs), `psvita-toolkit log-trace --ensure-flag` (injeta traces `[TRACE] >> f()` por\nfunção sob `#ifdef PORT_TRACE`; compilar com `-DPORT_TRACE=ON` para debug, `OFF` para\nprodução, ou `psvita-toolkit log-trace --remove` para removê-los da árvore).",
+    },
     "init_port.plan_written": {
         "es": "[+] PORTING_PLAN.md escrito.",
         "en": "[+] PORTING_PLAN.md written.",
@@ -1180,6 +1190,7 @@ cmake_install.cmake
 # Debugging en consola real
 /logs/
 log_*.txt
+*_???.log
 *.psp2dmp
 
 # Python
@@ -1263,6 +1274,10 @@ def write_plan_and_progress(ctx):
 ## {t('init_port.plan_section5_title')}
 
 {t('init_port.plan_tools_text')}
+
+## {t('init_port.plan_section6_title')}
+
+{t('init_port.plan_log_text', slug=ctx['slug'])}
 """
     (new_dir / "PORTING_PLAN.md").write_text(plan)
     print(f"{C.GREEN}{t('init_port.plan_written')}{C.RESET}")

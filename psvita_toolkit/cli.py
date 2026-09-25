@@ -266,6 +266,19 @@ def build_parser():
     p_live_reload.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_live_reload.add_argument("--poll-interval", type=int, help="Seconds between mtime checks (default: 2).")
 
+    p_logstd = sub.add_parser("log-standard", help="Check a port's on-device logger against the canonical <slug>_001..999 standard, optionally creating logs/saves staging dirs.")
+    p_logstd.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_logstd.add_argument("--slug", help="Port slug for the expected <slug>_NNN.log basename (default: from project config).")
+    p_logstd.add_argument("--fix-dirs", action="store_true",
+                          help="Create missing ux0_data/<slug>/logs/ and saves/ staging dirs (with .gitkeep).")
+
+    p_logtrace = sub.add_parser("log-trace", help="Deterministically add/remove detailed per-function trace logs guarded by -DPORT_TRACE (no AI involved).")
+    p_logtrace.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_logtrace.add_argument("--remove", action="store_true", help="Strip previously injected trace blocks instead of adding them.")
+    p_logtrace.add_argument("--dry-run", action="store_true", help="Count only, change nothing (only with injection).")
+    p_logtrace.add_argument("--ensure-flag", action="store_true",
+                            help="Also ensure CMakeLists.txt has the PORT_TRACE option block (OFF = production).")
+
     return parser
 
 
@@ -852,6 +865,59 @@ def _cmd_shader_live_reload(args):
     return 0
 
 
+def _cmd_log_standard(args):
+    """!
+    @brief `log-standard` subcommand handler: report logger discrepancies.
+    @param args Parsed CLI args (`project`, `slug`, `fix_dirs`).
+    @return `1` on missing project or any discrepancy, else `0`.
+    """
+    from . import log_kit
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    slug = args.slug or project_cfg.get("slug", "")
+    if not slug:
+        return _fail("no slug: pass --slug or adopt the project first.")
+    if args.fix_dirs:
+        for d in log_kit.ensure_local_log_dirs(project_cfg["_project_dir"], slug):
+            print(f"dir ready: {d}")
+    issues = log_kit.check_log_standard(project_cfg["_project_dir"], slug)
+    if not issues:
+        print(f"log standard OK: <slug>_001..999 under DATA_PATH/logs with a production flag.")
+        return 0
+    print(f"log standard: {len(issues)} discrepanc(ies) vs <{slug}>_001..999:")
+    for issue in issues:
+        print(f"  - {issue}")
+    return 1
+
+
+def _cmd_log_trace(args):
+    """!
+    @brief `log-trace` subcommand handler: inject or strip PORT_TRACE blocks.
+    @param args Parsed CLI args (`project`, `remove`, `dry_run`, `ensure_flag`).
+    @return `1` on missing project, else `0`.
+    """
+    from . import log_kit
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    project_dir = project_cfg["_project_dir"]
+    if args.ensure_flag:
+        state = log_kit.ensure_cmake_trace_flag(project_dir)
+        print(f"PORT_TRACE flag in CMakeLists.txt: {state}")
+    if args.remove:
+        stats = log_kit.strip_trace_logs(project_dir)
+        print(f"stripped {stats['blocks_removed']} trace block(s) in "
+              f"{stats['files_scanned']} file(s) -- production tree clean.")
+    else:
+        stats = log_kit.inject_trace_logs(project_dir, dry_run=args.dry_run)
+        mode = "would insert" if args.dry_run else "inserted"
+        print(f"{mode} {stats['inserted']} trace block(s) "
+              f"({stats['functions_found']} functions, {stats['files_scanned']} files). "
+              f"Build with -DPORT_TRACE=ON for traces, OFF (default) for production.")
+    return 0
+
+
 _HANDLERS = {
     "doctor": _cmd_doctor,
     "errcode": _cmd_errcode,
@@ -879,6 +945,8 @@ _HANDLERS = {
     "auto-bootstrap": _cmd_auto_bootstrap,
     "shader-transpile": _cmd_shader_transpile,
     "shader-live-reload": _cmd_shader_live_reload,
+    "log-standard": _cmd_log_standard,
+    "log-trace": _cmd_log_trace,
 }
 
 

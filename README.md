@@ -187,6 +187,9 @@ psvita-toolkit auto-bootstrap --project <ruta>                       # bootstrap
 psvita-toolkit so-patch --project <ruta> --apply-patch 0x812a4f10 --so juego.so  # parche binario real (dirección confirmada a mano)
 psvita-toolkit shader-transpile --dump-dir glsl_dump --out-dir assets/cg  # GLSL -> CG basado en AST
 psvita-toolkit shader-live-reload --project <ruta>                   # auto-subir .cg al guardar
+psvita-toolkit log-standard --project <ruta> --fix-dirs               # auditar logger vs estándar <slug>_001..999 + crear logs/saves
+psvita-toolkit log-trace --project <ruta> --ensure-flag               # inyectar trazas [TRACE] por función (PORT_TRACE=ON debug / OFF prod)
+psvita-toolkit log-trace --project <ruta> --remove                    # quitar trazas del árbol (producción)
 ```
 
 `--project` por defecto es el directorio actual. Cada subcomando devuelve código de salida `0`

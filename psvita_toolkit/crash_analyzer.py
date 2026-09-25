@@ -406,6 +406,14 @@ class SymbolTable:
         except Exception as e:
             print(f"{C.YELLOW}{t('crash_analyzer.symbols_extract_failed', path=self.so_path, error=e)}{C.RESET}")
 
+    # Nearest-preceding-symbol fallback is capped: dynamic symbol sizes are
+    # often bogus-small (e.g. `mono_arm_throw_exception_by_token` spans way
+    # past its recorded 0x60 bytes), so falling into the gap before the NEXT
+    # symbol is legitimate -- but past this tail distance the attribution
+    # (e.g. `__udivdi3 + 0xbea5c`, a data address 760 KB past the symbol) is
+    # noise, and a bare offset is more honest for triage.
+    FALLBACK_MAX_TAIL = 0x10000
+
     def lookup(self, offset):
         """!
         @brief Resolve a `.so`-relative offset to `symbol_name + 0xoffset`.
@@ -413,21 +421,28 @@ class SymbolTable:
                  end)` range (with a small +4 byte tolerance past `end`, since
                  reported symbol sizes can be off by one instruction). If no
                  symbol contains the offset, falls back to the nearest
-                 preceding symbol by address.
+                 preceding symbol, but ONLY if the offset still precedes the
+                 next symbol AND lies within `FALLBACK_MAX_TAIL` of the match
+                 -- farther than that (data addresses far past the last code
+                 symbol), returns the raw offset instead of inventing
+                 attributions like `__udivdi3 + 0xbea5c`.
         @param offset Offset relative to the `.so`'s load base.
         @return `"symbol + 0xN"` string, or `"0xN"` (the raw offset) if the
-                symbol table is empty.
+                 symbol table is empty or nothing is close enough.
         """
         for start, end, demangled, _ in self.symbols:
             if start <= offset < end or (start <= offset <= end + 4 and end > start):
                 return f"{demangled} + 0x{offset - start:x}"
-        prev = None
+        prev, nxt = None, None
         for start, _end, demangled, _ in self.symbols:
             if start <= offset:
                 prev = (start, demangled)
             else:
+                nxt = start
                 break
-        return f"{prev[1]} + 0x{offset - prev[0]:x}" if prev else f"0x{offset:x}"
+        if prev and (nxt is None or offset < nxt) and offset - prev[0] <= self.FALLBACK_MAX_TAIL:
+            return f"{prev[1]} + 0x{offset - prev[0]:x}"
+        return f"0x{offset:x}"
 
 
 def _extract_so_base_from_logs(project_dir):
@@ -467,27 +482,45 @@ def _extract_so_base_from_logs(project_dir):
     return None
 
 
-def _auto_detect_so_base(dump_addrs, so_syms, so_path=None):
+def _auto_detect_so_base(dump_addrs, so_syms, so_path=None, pc_lr_addrs=None):
     """!
-    @brief Guess the `.so`'s runtime load base by voting across candidate
-           addresses found on the stack/registers against known symbol offsets.
+    @brief Guess the `.so`'s runtime load base, preferring precision over recall.
+    @details PC/LR vote with a heavy weight (they are code pointers by
+             construction); raw stack words vote lightly (most are heap/data
+             pointers that happen to alias a symbol offset by coincidence and
+             used to elect garbage bases like `0x81eed000`). A winning base is
+             only accepted if PC or LR actually lands inside the `.so`
+             (`[base, base + size)`); otherwise `None` is returned so the
+             caller falls back to a known base instead of reporting FMOD-style
+             attributions of heap addresses.
+    @param dump_addrs Every candidate address scraped from the dump.
+    @param so_syms `SymbolTable` of the `.so` being matched.
+    @param so_path Path to the `.so` (used for its on-disk size).
+    @param pc_lr_addrs `(pc, lr)` tuple; weighted heavily when present.
+    @return Integer base address, or `None` if no base validates.
     """
     if not so_syms or not so_syms.symbols:
         return None
     so_size = os.path.getsize(so_path) if so_path and os.path.isfile(so_path) else 0x10000000
+    pc_lr_set = set()
+    if pc_lr_addrs:
+        for a in pc_lr_addrs:
+            pc_lr_set.add(a & ~1)
     candidates = Counter()
     for raw_addr in dump_addrs:
         val = raw_addr & ~1
         if not (0x80000000 <= val <= 0x9fffffff):
             continue
+        weight = 25 if val in pc_lr_set else 1
         for sym_start, sym_end, _, _ in so_syms.symbols:
             size = max(sym_end - sym_start, 0x100)
             base_cand = (val - sym_start) & ~0xFFF
             offset_in_so = val - base_cand
             if 0x80000000 <= base_cand <= 0x9fffffff and 0 <= offset_in_so < so_size and 0 <= (val - base_cand - sym_start) <= size:
-                candidates[base_cand] += 1
-    if candidates:
-        return candidates.most_common(1)[0][0]
+                candidates[base_cand] += weight
+    for base_cand, _votes in candidates.most_common(5):
+        if pc_lr_set and any(base_cand <= a < base_cand + so_size for a in pc_lr_set):
+            return base_cand
     return None
 
 
@@ -540,11 +573,16 @@ def _score_so_candidate(so_path, project_dir, project_cfg=None):
     base_name = os.path.basename(so_path).lower()
     score = 0
 
-    # 1. Configured name in project_cfg gets top priority
+    # 1. Configured name in project_cfg gets top priority -- but as a bonus,
+    # NOT an early return: several files can share the same basename (e.g. an
+    # anti-tamper stub in lib/armeabi-v7a/ vs the real engine in
+    # assets/libs/armeabi-v7a/), and the tie must be broken by file size
+    # below so the real (MBs) engine beats the stub (KBs).
     if project_cfg:
         configured = (project_cfg.get("main_so") or project_cfg.get("so_name") or project_cfg.get("so_file") or "").lower()
-        if configured and (configured in base_name or base_name == configured):
-            return 100000
+        configured_base = os.path.basename(configured)
+        if configured and (configured_base == base_name or configured_base in base_name or base_name in configured_base):
+            score += 100000
 
     # 2. Match against decompiled directory names (e.g. decompiled/libpes2012)
     stem = Path(so_path).stem.lower()
@@ -590,13 +628,23 @@ def _auto_find_files(project_dir, build_dir, project_cfg=None):
     elf_candidates = glob.glob(os.path.join(project_dir, build_dir, "*.elf")) + glob.glob(os.path.join(project_dir, "*.elf"))
     elf_file = elf_candidates[0] if elf_candidates else None
 
-    # Check project_cfg first
+    # Check project_cfg first. The configured value is often a bare basename
+    # (e.g. "libunity.so"), which can match several files (stub vs real
+    # engine) -- in that case pick the LARGEST match, since real engines are
+    # MBs and stubs/proxies are KBs.
     if project_cfg:
         configured_so = project_cfg.get("main_so") or project_cfg.get("so_name") or project_cfg.get("so_file")
         if configured_so:
             full_conf = os.path.join(project_dir, configured_so) if not os.path.isabs(configured_so) else configured_so
             if os.path.isfile(full_conf):
                 return elf_file, full_conf
+            matches = [
+                p for p in glob.glob(os.path.join(project_dir, "**", os.path.basename(configured_so)), recursive=True)
+                if not os.path.basename(p).startswith("._") and os.path.isfile(p)
+            ]
+            if matches:
+                matches.sort(key=lambda p: os.path.getsize(p), reverse=True)
+                return elf_file, matches[0]
 
     so_candidates = []
     for p in glob.glob(os.path.join(project_dir, "**", "*.so"), recursive=True):
@@ -607,8 +655,92 @@ def _auto_find_files(project_dir, build_dir, project_cfg=None):
     if not so_candidates:
         return elf_file, None
 
-    so_candidates.sort(key=lambda p: _score_so_candidate(p, project_dir, project_cfg), reverse=True)
+    # Score first, file size second: same-basename ties (stub vs real engine)
+    # are broken in favour of the larger file.
+    def _sort_key(p):
+        try:
+            size = os.path.getsize(p)
+        except OSError:
+            size = 0
+        return (_score_so_candidate(p, project_dir, project_cfg), size)
+
+    so_candidates.sort(key=_sort_key, reverse=True)
     return elf_file, so_candidates[0]
+
+
+def _extract_so_modules_from_source(project_dir):
+    """!
+    @brief Read the loader's own `LOAD_ADDRESS_*`/`SO_PATH_*` pairs to learn
+           the REAL runtime base of every Android `.so` the port loads.
+    @details Scans `source/**/*.{c,h}` for `#define LOAD_ADDRESS_<TAG>
+             0x...` and `CMakeLists.txt` for `SO_PATH_<TAG>` values, pairing
+             both by `<TAG>`. The `SO_PATH` value is a Vita-side path (e.g.
+             `ux0:data/.../libmono.so`), so only its basename is used to find
+             the matching local `.so` (largest recursive match wins, to skip
+             anti-tamper stubs sharing the same basename).
+    @param project_dir Path to the port's project directory.
+    @return list of `(tag, local_so_path, base)` tuples (possibly empty when
+             the port still uses the single-`main.so` boilerplate layout).
+    """
+    if not project_dir or not os.path.isdir(project_dir):
+        return []
+    load_bases = {}
+    src_files = (
+        glob.glob(os.path.join(project_dir, "source", "**", "*.c"), recursive=True)
+        + glob.glob(os.path.join(project_dir, "source", "**", "*.h"), recursive=True)
+    )
+    for src in src_files:
+        if os.path.basename(src).startswith("._"):
+            continue
+        try:
+            with open(src, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    m = re.match(r'\s*#\s*define\s+(LOAD_ADDRESS_(\w+))\s+(0x[0-9a-fA-F]+)', line)
+                    if m:
+                        try:
+                            load_bases[m.group(2).upper()] = int(m.group(3), 16)
+                        except ValueError:
+                            continue
+        except OSError:
+            continue
+    if not load_bases:
+        return []
+
+    so_tags = {}
+    for cmake_name in ("CMakeLists.txt",):
+        cmake_path = os.path.join(project_dir, cmake_name)
+        try:
+            with open(cmake_path, "r", encoding="utf-8", errors="ignore") as f:
+                text = f.read()
+        except OSError:
+            continue
+        # Values are Vita-side paths and may embed CMake vars, e.g.
+        # set(SO_PATH_MONO "${DATA_PATH}libmono.so" ...) -- so extract the
+        # trailing "*.so" filename instead of assuming a clean path.
+        for m in re.finditer(r'SO_PATH_(\w+)\b', text):
+            tag = m.group(1).upper()
+            if tag in so_tags:
+                continue
+            tail = text[m.end():m.end() + 160]
+            f = re.search(r'([\w\-.]+\.so)', tail)
+            if f:
+                so_tags[tag] = f.group(1)
+
+    modules = []
+    for tag, base in load_bases.items():
+        base_name = so_tags.get(tag)
+        if not base_name:
+            continue
+        matches = [
+            p for p in glob.glob(os.path.join(project_dir, "**", base_name), recursive=True)
+            if not os.path.basename(p).startswith("._") and os.path.isfile(p)
+        ]
+        if not matches:
+            continue
+        matches.sort(key=lambda p: os.path.getsize(p) if os.path.isfile(p) else 0, reverse=True)
+        modules.append((tag, matches[0], base))
+    modules.sort(key=lambda m: m[2])
+    return modules
 
 
 
@@ -860,16 +992,31 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
     crashed = [t for t in core.threads if t.stop_reason != 0] or core.threads[:1]
 
     all_addrs = []
+    pc_lr_addrs = []
     for thr in crashed:
         all_addrs.append(thr.pc)
         all_addrs.append(thr.regs.gpr[14])
+        pc_lr_addrs += [thr.pc, thr.regs.gpr[14]]
         sp = thr.regs.gpr[13]
         for x in range(-4, stack_depth):
             d = core.read_vaddr(sp + 4 * x, 4)
             if d:
                 all_addrs.append(u32(d, 0))
 
+    # Multi-module ports (e.g. libmono.so + libunity.so at fixed
+    # LOAD_ADDRESS_*): learn every (path, base) from the loader's own
+    # sources so PC/LR resolve against the module they really belong to.
+    so_modules = []  # (tag, path, base, SymbolTable, size)
     if not so_base:
+        for tag, mod_path, mod_base in _extract_so_modules_from_source(project_dir):
+            try:
+                mod_size = os.path.getsize(mod_path)
+            except OSError:
+                continue
+            so_modules.append((tag, mod_path, mod_base, SymbolTable(mod_path), mod_size))
+            log(f"[+] Módulo conocido por el loader: '{os.path.basename(mod_path)}' ({mod_size // 1024} KB) @ 0x{mod_base:x}")
+
+    if not so_base and not so_modules:
         if project_cfg and project_cfg.get("so_base"):
             try:
                 cfg_b = project_cfg["so_base"]
@@ -884,12 +1031,26 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
                 log(t("crash_analyzer.so_base_from_log", addr=so_base))
 
         if not so_base and so_syms:
-            so_base = _auto_detect_so_base(all_addrs, so_syms, so_path=so_path)
+            so_base = _auto_detect_so_base(all_addrs, so_syms, so_path=so_path,
+                                           pc_lr_addrs=pc_lr_addrs)
             if so_base:
                 log(t("crash_analyzer.so_base_auto", addr=so_base))
             else:
-                so_base = 0x98000000
-                log(t("crash_analyzer.so_base_fallback", addr=so_base))
+                log("[*] Base auto-detectada rechazada: PC/LR no caen dentro del .so "
+                    "-- se usa la base explícita (--so-base) o la del loader.")
+
+    def _lookup_module(addr):
+        # An address belongs to a module ONLY if it falls inside that
+        # module's real [base, base + size) window. Heap/malloc addresses
+        # (e.g. 0x823xxxxx JIT buffers) must never resolve to .so symbols.
+        for _tag, mod_path, mod_base, mod_syms, mod_size in so_modules:
+            if mod_base <= addr < mod_base + mod_size:
+                off = addr - mod_base
+                name = os.path.basename(mod_path)
+                if mod_syms and mod_syms.symbols:
+                    return f"0x{addr:x} [{name} + 0x{off:x} -> {mod_syms.lookup(off)}]"
+                return f"0x{addr:x} [{name} + 0x{off:x}]"
+        return None
 
     def resolve(addr):
         notation = core.get_address_notation("", addr)
@@ -902,16 +1063,24 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
                 line_str = line_info.decode("utf-8", "ignore") if isinstance(line_info, bytes) else str(line_info)
                 return f"0x{addr:x} [{mod_name} + 0x{off:x}] ({line_str})"
             return f"0x{addr:x} [{mod_name} seg{seg} + 0x{off:x}]"
-        if so_base and (so_base <= addr <= so_base + 0x20000000 or 0x80000000 <= addr <= 0x9fffffff):
-            so_off = addr - so_base
-            so_size = os.path.getsize(so_path) if so_path and os.path.isfile(so_path) else 0x10000000
-            so_name = os.path.basename(so_path) if so_path else "lib.so"
-            if 0 <= so_off < so_size:
+        if so_modules:
+            hit = _lookup_module(addr & ~1)
+            if hit:
+                return hit
+            return f"0x{addr:x}"
+        if so_base and so_path:
+            val = addr & ~1
+            try:
+                so_size = os.path.getsize(so_path)
+            except OSError:
+                so_size = 0x10000000
+            so_name = os.path.basename(so_path)
+            if so_base <= val < so_base + so_size:
+                so_off = val - so_base
                 if so_syms:
                     return f"0x{addr:x} [{so_name} + 0x{so_off:x} -> {so_syms.lookup(so_off)}]"
                 return f"0x{addr:x} [{so_name} + 0x{so_off:x}]"
-            elif so_off >= so_size:
-                return f"0x{addr:x} [{so_name} FUERA DE RANGO: offset 0x{so_off:x} > tamaño 0x{so_size:x}]"
+            return f"0x{addr:x}"
         return f"0x{addr:x}"
 
     triage_frames = []
@@ -943,21 +1112,54 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
             log(t("crash_analyzer.root_cause_division_by_zero"))
         log(t("crash_analyzer.crash_location", pc=resolve(thread.pc)))
 
-        if so_base and 0x80000000 <= thread.pc <= 0x9fffffff and so_path:
-            pc_off = thread.pc - so_base
+        # Module owning PC (multi-module loader knowledge first, explicit
+        # --so/--so-base second). Heap addresses never own PC.
+        pc_mod_path, pc_mod_off = None, None
+        pc_val = thread.pc & ~1
+        for _tag, mod_path, mod_base, _syms, mod_size in so_modules:
+            if mod_base <= pc_val < mod_base + mod_size:
+                pc_mod_path, pc_mod_off = mod_path, pc_val - mod_base
+                break
+        if pc_mod_path is None and so_base and so_path:
+            try:
+                _sz = os.path.getsize(so_path)
+            except OSError:
+                _sz = 0x10000000
+            if so_base <= pc_val < so_base + _sz:
+                pc_mod_path, pc_mod_off = so_path, pc_val - so_base
+
+        if pc_mod_path is not None:
+            # The .so mixes ARM and Thumb-2 code and nothing records which
+            # mode a given function uses (forcing Thumb on ARM code decodes
+            # garbage, and vice versa) -- so decode BOTH and label them. The
+            # coherent window (sane prologue, no `undefined instruction`
+            # salad) is the real mode; see the `so-crash-triage` skill.
             crash_marker = f"[{t('crash_analyzer.crash_instruction_marker')}]"
-            for line in _disassemble_around(so_path, pc_off, is_thumb=True):
-                if crash_marker in line:
-                    log(t("crash_analyzer.crash_instruction", line=line.strip()))
-                    crash_instruction_line = line.strip()
+            arm_lines = _disassemble_around(pc_mod_path, pc_mod_off, is_thumb=False)
+            thumb_lines = _disassemble_around(pc_mod_path, pc_mod_off, is_thumb=True)
+            arm_hit = next((l.strip() for l in arm_lines if crash_marker in l), None)
+            thumb_hit = next((l.strip() for l in thumb_lines if crash_marker in l), None)
+            if arm_hit or thumb_hit:
+                combined = " | ".join(
+                    f"{mode}: {hit}" for mode, hit in (("ARM", arm_hit), ("Thumb-2", thumb_hit)) if hit
+                )
+                log(t("crash_analyzer.crash_instruction", line=combined))
+                crash_instruction_line = combined
+                for hit in (arm_hit, thumb_hit):
+                    if not hit:
+                        continue
                     for i in range(13):
-                        if f"r{i}" in line.lower() and thread.regs.gpr[i] == 0:
+                        if f"r{i}" in hit.lower() and thread.regs.gpr[i] == 0 and i not in null_ptr_regs:
                             log(t("crash_analyzer.probable_cause_null_ptr", reg=i))
                             null_ptr_regs.append(i)
 
         log(t("crash_analyzer.section_disasm_pc"))
-        if so_base and 0x80000000 <= thread.pc <= 0x9fffffff and so_path:
-            for line in _disassemble_around(so_path, thread.pc - so_base, is_thumb=True):
+        if pc_mod_path is not None:
+            log("--- ARM ---")
+            for line in _disassemble_around(pc_mod_path, pc_mod_off, is_thumb=False):
+                log(line)
+            log("--- Thumb-2 ---")
+            for line in _disassemble_around(pc_mod_path, pc_mod_off, is_thumb=True):
                 log(line)
         elif elf:
             notation = core.get_address_notation("PC", thread.pc)
@@ -1025,7 +1227,13 @@ def analyze_menu(project_cfg, global_cfg):
     all_sos = [p for p in glob.glob(os.path.join(project_dir, "**", "*.so"), recursive=True) if not os.path.basename(p).startswith("._")]
     selected_so = None
     if len(all_sos) > 1 and not project_cfg.get("main_so"):
-        all_sos.sort(key=lambda p: _score_so_candidate(p, project_dir, project_cfg), reverse=True)
+        def _menu_key(p):
+            try:
+                size = os.path.getsize(p)
+            except OSError:
+                size = 0
+            return (_score_so_candidate(p, project_dir, project_cfg), size)
+        all_sos.sort(key=_menu_key, reverse=True)
         so_choice = tui.select_list(
             t("crash_analyzer.menu_pick_so"),
             all_sos,

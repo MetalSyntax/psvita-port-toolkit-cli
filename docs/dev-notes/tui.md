@@ -62,3 +62,43 @@ shortcuts resume once the user leaves search mode. Escape only reliably cancels 
 `getch()` peeks (via a short `select()` timeout) for whether more bytes follow a lone `\x1b` --
 a real arrow-key escape sequence arrives as one burst from the terminal driver, a standalone
 Escape key doesn't, so the two are told apart instead of `getch()` always assuming an arrow.
+
+## Why frames repaint in place instead of `clear()` per keypress
+
+`_navigate()` builds the whole frame as a list of strings (`_build_frame()`) and writes it in one
+go as cursor-home + lines (each ending in `\033[K`) + `\033[J`. A full `clear()` (which also
+purges scrollback) on every arrow press flickers visibly on slower terminals and over SSH;
+repainting in place doesn't. `\033[K` per line matters: the highlighted row is a few columns
+wider than a plain one, and without clearing to end-of-line the old highlight's tail would stay
+behind. Long lists are windowed around the selection (`··· ↑ N more ···`) so the frame always
+fits the terminal height -- otherwise the terminal scrolls and screen rows stop matching frame
+rows. `header_extra` is captured once per `_navigate()` call (it's display-only by contract), so
+slow headers (FTP status, asset counts) don't re-run on every keypress.
+
+## Mouse (SGR 1006) and why click mapping counts screen rows
+
+Mouse reporting (`\033[?1000h\033[?1006h`) is turned on only while `_navigate()` waits and off
+again in its `finally`, so actions that use `input()` get normal terminal selection/copy back.
+The terminal reports `\033[<btn;x;yM` (press) / `...m` (release); `_split_mouse_events()`
+drops releases and the motion bit. Left click selects, clicking the selected row confirms,
+the wheel moves by 3, right click is "back". `_build_frame()` returns the *screen* row where
+each item starts, counting wrapped lines (a long breadcrumb or label takes 2+ rows); mapping
+by frame-line index would make every click below a wrapped line land one item off.
+`PSVITA_TOOLKIT_NO_MOUSE=1` disables it for terminals that misbehave.
+
+## Live resize and why raw mode stays on while waiting
+
+`getch(wake=...)` polls a predicate every 250ms *inside* one raw-mode session. `_navigate()`
+passes "did the terminal size change?", so a resize redraws immediately. An earlier version
+toggled raw mode on and off around each 250ms poll. Any key or click that arrived during
+a cooked-mode gap got echoed as garbage or held in the line-discipline buffer, so the poll
+has to stay inside `getch()`.
+
+## Retry any option (R after an action)
+
+After any `run_menu()` callback finishes or raises, `_after_action_prompt()` offers `R` to run
+the same option again, or Enter to go back. This is the generic answer to "some options have
+retries and others don't": every menu action gets it without its own retry loop. Transient
+network failures are *also* auto-retried where they happen. Every FTP entry point goes through
+`ftp_ops._connect_with_retry()`, never bare `_connect()`, so VitaShell's occasional refused
+reconnect doesn't fail one screen while another silently recovers.

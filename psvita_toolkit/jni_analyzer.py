@@ -616,7 +616,8 @@ def document_lifecycle_in_plan(project_cfg):
         print(f"{C.YELLOW}{t('jni_analyzer.plan_not_found')}{C.RESET}")
         return
 
-    lines = ["", "## Auto-detected lifecycle methods (psvita-toolkit)", "",
+    header = "## Auto-detected lifecycle methods (psvita-toolkit)"
+    lines = ["", header, "",
              "Native methods whose name matches a well-known Android/GL app lifecycle hook --",
              "these are the ones `main.c`/the loader most likely needs to call directly to",
              "drive the game (there's no real Android `Activity`/`GLSurfaceView` calling them", "for you).", ""]
@@ -624,7 +625,21 @@ def document_lifecycle_in_plan(project_cfg):
         params = ", ".join(entry["params"]) or "void"
         lines.append(f"- `{fqcn}.{entry['name']}({params})`")
     lines.append("")
+    section = "\n".join(lines)
 
-    with open(plan_path, "a", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    # Idempotent: re-running jni-analyze must refresh the section, never
+    # append a second copy of it.
+    text = plan_path.read_text(encoding="utf-8")
+    if header in text:
+        import re as _re
+        pattern = _re.compile(
+            r"\n## Auto-detected lifecycle methods \(psvita-toolkit\).*?"
+            r"(?=\n## |\Z)",
+            _re.DOTALL,
+        )
+        text = pattern.sub(section.rstrip("\n") + "\n", text)
+        plan_path.write_text(text, encoding="utf-8")
+    else:
+        with open(plan_path, "a", encoding="utf-8") as f:
+            f.write(section)
     print(f"{C.GREEN}{t('jni_analyzer.lifecycle_found', count=len(hits), plan_path=plan_path)}{C.RESET}")

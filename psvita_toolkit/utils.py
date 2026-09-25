@@ -522,7 +522,14 @@ def scaffold_ux0_data(project_cfg):
             total_bytes += size
 
     for runtime_dir in ("saves", "logs"):
-        (dest_root / runtime_dir).mkdir(parents=True, exist_ok=True)
+        d = dest_root / runtime_dir
+        d.mkdir(parents=True, exist_ok=True)
+        # `.gitkeep` so git tracks the dir; the FTP uploader skips the
+        # placeholder itself but still creates the (possibly empty) remote
+        # dir on the console -- the game needs it for saves/per-run logs.
+        keep = d / ".gitkeep"
+        if not keep.exists():
+            keep.write_text("")
 
     size_mb = f"{total_bytes / (1024 * 1024):.1f}"
     print(t("utils.ux0data_dir_done", color_green=C.GREEN, count=total_files, size_mb=size_mb, dest=dest_root, color_reset=C.RESET))

@@ -532,9 +532,9 @@ STRINGS = {
         "pt": "[+] Última screenshot: '{name}' -> baixando...",
     },
     "ftp_ops.screenshots_available_title": {
-        "es": "Screenshots disponibles en la consola:",
-        "en": "Screenshots available on the console:",
-        "pt": "Screenshots disponíveis no console:",
+        "es": "Screenshots disponibles en la consola (más nuevas primero):",
+        "en": "Screenshots available on the console (newest first):",
+        "pt": "Screenshots disponíveis no console (mais novas primeiro):",
     },
     "ftp_ops.screenshots_found_downloading": {
         "es": "[+] {count} screenshot(s) encontrada(s). Descargando...",
@@ -1033,13 +1033,56 @@ def _iter_upload_files(local_dir):
     @param local_dir Local directory to walk.
     @return Generator of `(local_path, relative_posix_path)` tuples, sorted
             for a deterministic upload order.
+    @note `.gitkeep` placeholders (used so `git` tracks the otherwise-empty
+          `logs/`/`saves/` runtime dirs) are skipped as payload, but their
+          parent directory is still created on the console by
+          `upload_ux0_data_dir()` -- see `_iter_upload_empty_dirs()`.
     """
     for item in sorted(Path(local_dir).rglob("*")):
         if item.is_dir():
             continue
         if item.name.startswith("._") or item.name == ".DS_Store":
             continue
+        if item.name == ".gitkeep":
+            continue
         yield item, item.relative_to(local_dir).as_posix()
+
+
+def _iter_upload_empty_dirs(local_dir):
+    """!
+    @brief Yield relative POSIX paths of directories under `local_dir` that
+           contain no uploadable file (e.g. the empty `logs/`/`saves/`
+           runtime dirs created by `utils.scaffold_ux0_data()`).
+    @param local_dir Local directory to walk.
+    @return Generator of relative POSIX dir paths, sorted, shallowest first
+            so parents are created before children.
+    @note The old uploader only ran `MKD` for directories that contained at
+          least one file, so empty `logs/`/`saves/` never appeared on the
+          console and the game had nowhere to write its per-run log or
+          save -- this iterator closes that gap.
+    """
+    base = Path(local_dir)
+    uploadable_here = set()
+    for item in sorted(base.rglob("*")):
+        if item.is_dir():
+            continue
+        if item.name.startswith("._") or item.name == ".DS_Store":
+            continue
+        if item.name == ".gitkeep":
+            continue
+        parent = item.parent
+        while True:
+            try:
+                uploadable_here.add(parent.relative_to(base).as_posix())
+            except ValueError:
+                break
+            if parent == base:
+                break
+            parent = parent.parent
+    for d in sorted(p for p in (p for p in base.rglob("*") if p.is_dir())):
+        rel = d.relative_to(base).as_posix()
+        if rel not in uploadable_here:
+            yield rel
 
 
 def upload_ux0_data_dir(project_cfg, global_cfg, non_interactive=False):
@@ -1061,7 +1104,8 @@ def upload_ux0_data_dir(project_cfg, global_cfg, non_interactive=False):
         return
 
     files = list(_iter_upload_files(local_dir))
-    if not files:
+    empty_dirs = list(_iter_upload_empty_dirs(local_dir))
+    if not files and not empty_dirs:
         print(f"{C.YELLOW}{t('ftp_ops.ux0data_dir_empty', path=local_dir)}{C.RESET}")
         return
 
@@ -1080,6 +1124,16 @@ def upload_ux0_data_dir(project_cfg, global_cfg, non_interactive=False):
     try:
         create_dir_if_missing(ftp, vita_game_dir)
         made_dirs = {""}
+        for empty_rel in empty_dirs:
+            current = ""
+            for part in empty_rel.split("/"):
+                current = f"{current}/{part}" if current else part
+                if current not in made_dirs:
+                    try:
+                        ftp.mkd(f"{vita_game_dir}/{current}")
+                    except all_errors:
+                        pass
+                    made_dirs.add(current)
         for index, (local_path, rel_path) in enumerate(files, start=1):
             rel_dir = "/".join(rel_path.split("/")[:-1])
             if rel_dir and rel_dir not in made_dirs:
@@ -1133,7 +1187,7 @@ def _local_logs_dir(project_cfg):
 
 def list_remote_logs(ftp, project_cfg):
     """!
-    @brief List `.txt` logs in the Vita's configured logs directory.
+    @brief List `.txt`/`.log` logs in the Vita's configured logs directory.
     @param ftp Connected `ftplib.FTP` instance.
     @param project_cfg Active project config dict (`vita_logs_dir`).
     @return list of `(name, mtime)` tuples, oldest first, newest last.
@@ -1183,7 +1237,7 @@ def list_local_history(project_cfg, kind="logs"):
     """!
     @brief List previously downloaded logs/dumps kept in `<project_dir>/logs/`.
     @param project_cfg Active project config dict.
-    @param kind `"logs"` for `.txt` files, or `"dumps"` for `psp2core*`/`.dmp` files.
+    @param kind `"logs"` for `.txt`/`.log` files, or `"dumps"` for `psp2core*`/`.dmp` files.
     @return list of `Path`s, newest first.
     """
     logs_dir = _local_logs_dir(project_cfg)
@@ -1191,7 +1245,8 @@ def list_local_history(project_cfg, kind="logs"):
         files = [p for p in logs_dir.iterdir()
                  if p.is_file() and (p.name.startswith("psp2core") or p.suffix == ".dmp")]
     else:
-        files = [p for p in logs_dir.iterdir() if p.is_file() and p.suffix == ".txt" and ".analysis" not in p.name]
+        files = [p for p in logs_dir.iterdir()
+                 if p.is_file() and p.suffix in (".txt", ".log") and ".analysis" not in p.name]
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return files
 
@@ -1220,7 +1275,7 @@ def download_logs_and_dumps(project_cfg, global_cfg):
         _browse_local_history(project_cfg)
         return
 
-    ftp = _connect(project_cfg, global_cfg)
+    ftp = _connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         return
     try:
@@ -1392,7 +1447,7 @@ def download_glsl_shaders(project_cfg, global_cfg):
     @param project_cfg Active project config dict (`vita_glsl_dir`).
     @param global_cfg Global config dict (VPN bypass, etc).
     """
-    ftp = _connect(project_cfg, global_cfg)
+    ftp = _connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         return
     vita_glsl_dir = project_cfg.get("vita_glsl_dir")
@@ -1432,7 +1487,7 @@ def upload_cg_shaders(project_cfg, global_cfg):
         print(f"{C.RED}{t('ftp_ops.no_cg_files', path=local_dir)}{C.RESET}")
         return
 
-    ftp = _connect(project_cfg, global_cfg)
+    ftp = _connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         return
     vita_cg_dir = project_cfg.get("vita_cg_dir")
@@ -1516,6 +1571,25 @@ def _list_remote_screenshot_files(ftp, path):
     return results
 
 
+_SCREENSHOT_STAMP_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})-(\d{6})")
+
+
+def _screenshot_sort_key(relpath, mtime):
+    """!
+    @brief Sort key for screenshots: the `YYYY-MM-DD-HHMMSS` capture stamp the Vita
+           embeds in every filename, as a `YYYYMMDDHHMMSS` string.
+    @note `_remote_sort_key()` can't be reused here: its "longest digit run"
+          heuristic picks the `HHMMSS` part of `2026-09-25-013508.jpg`, which sorts
+          by time of day and ignores the date. The per-shot parent folder
+          (`eg/`, `bf/`, ...) is ignored entirely. Names without a stamp fall back
+          to the `LIST` mtime (`YYYYMMDDHHMM`, padded to the same width).
+    """
+    m = _SCREENSHOT_STAMP_RE.search(relpath.rsplit("/", 1)[-1])
+    if m:
+        return "".join(m.groups())
+    return (mtime or "").ljust(14, "0")
+
+
 def list_remote_screenshots(ftp, project_cfg):
     """!
     @brief List screenshots in the Vita's `ux0:picture/SCREENSHOT/` folder, descending
@@ -1528,7 +1602,7 @@ def list_remote_screenshots(ftp, project_cfg):
     """
     vita_screenshots_dir = project_cfg.get("vita_screenshots_dir", "/ux0:/picture/SCREENSHOT")
     shots = _list_remote_screenshot_files(ftp, vita_screenshots_dir)
-    shots.sort(key=lambda x: _remote_sort_key(x[0].rsplit("/", 1)[-1], x[1]))
+    shots.sort(key=lambda x: _screenshot_sort_key(x[0], x[1]))
     return shots
 
 
@@ -1588,7 +1662,7 @@ def download_screenshots(project_cfg, global_cfg):
         _browse_local_screenshots(project_cfg)
         return
 
-    ftp = _connect(project_cfg, global_cfg)
+    ftp = _connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         return
     vita_screenshots_dir = project_cfg.get("vita_screenshots_dir", "/ux0:/picture/SCREENSHOT")
@@ -1610,7 +1684,7 @@ def download_screenshots(project_cfg, global_cfg):
         elif action == "pick":
             while True:
                 picked = tui.select_list(
-                    t("ftp_ops.screenshots_available_title"), shots,
+                    t("ftp_ops.screenshots_available_title"), shots[::-1],
                     label_fn=lambda e: f"{e[0]:<48} {C.DIM}{e[1] or ''}{C.RESET}",
                 )
                 if picked is None:
@@ -1649,7 +1723,9 @@ def _browse_local_screenshots(project_cfg):
     local_dir = _local_screenshots_dir(project_cfg)
     files = sorted(
         (p for p in local_dir.rglob("*") if p.is_file() and p.suffix.lower() in _SCREENSHOT_EXTS),
-        key=lambda p: p.stat().st_mtime, reverse=True,
+        key=lambda p: _screenshot_sort_key(p.name, time.strftime(
+            "%Y%m%d%H%M", time.localtime(p.stat().st_mtime))),
+        reverse=True,
     )
     print(f"\n{C.BOLD}{t('ftp_ops.local_screenshots_title')}{C.RESET}")
     if not files:
@@ -1675,7 +1751,7 @@ def check_libshacccg(project_cfg, global_cfg):
           shader, even a trivial one -- worth checking in isolation. See
           docs/dev-notes/ftp_ops.md.
     """
-    ftp = _connect(project_cfg, global_cfg)
+    ftp = _connect_with_retry(project_cfg, global_cfg)
     if not ftp:
         return
     candidates = ["/ur0:/data/libshacccg.suprx", "/ur0:/data/external/libshacccg.suprx"]

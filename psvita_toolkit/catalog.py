@@ -163,6 +163,16 @@ CATALOG = [
                 "en": "Live UDP log server, colored by severity -- for hangs so total the game never gets to write the log to disk before you reset the console.",
                 "pt": "Servidor de logs UDP em tempo real, colorido por severidade -- para hangs tão totais que o jogo nem chega a escrever o log em disco antes de você resetar o console.",
             }},
+            {"name": "log-standard", "tags": [], "desc": {
+                "es": "Revisa el logger del port contra el estándar <slug>_001..999 bajo DATA_PATH/logs (con flag de producción) y lista cada discrepancia; puede crear los dirs logs/saves que faltan.",
+                "en": "Checks the port's logger against the <slug>_001..999 standard under DATA_PATH/logs (with a production flag) and lists every discrepancy; can create missing logs/saves dirs.",
+                "pt": "Verifica o logger do port contra o padrão <slug>_001..999 sob DATA_PATH/logs (com flag de produção) e lista cada discrepância; pode criar os dirs logs/saves ausentes.",
+            }},
+            {"name": "log-trace", "tags": [_GEN_C], "desc": {
+                "es": "Inyecta (o quita) logs detallados de entrada de función con #ifdef PORT_TRACE, por regex sin IA -- depurás con -DPORT_TRACE=ON y producís con OFF sin tocar código a mano.",
+                "en": "Injects (or strips) detailed function-entry logs under #ifdef PORT_TRACE, by regex with no AI -- debug with -DPORT_TRACE=ON and ship with OFF without hand-editing code.",
+                "pt": "Injeta (ou remove) logs detalhados de entrada de função com #ifdef PORT_TRACE, por regex sem IA -- depura com -DPORT_TRACE=ON e entrega com OFF sem editar código à mão.",
+            }},
             {"name": "gdb-map", "tags": [_OPTIONAL], "desc": {
                 "es": "Genera el script para gdb-multiarch con los símbolos del loader y del .so Android, contra el gdbstub que ya tenga tu loader. Puede capturar solo la dirección base por UDP.",
                 "en": "Generates the gdb-multiarch script with the loader's and the Android .so's symbols, against whatever gdbstub your loader already has. Can auto-capture the base address over UDP.",

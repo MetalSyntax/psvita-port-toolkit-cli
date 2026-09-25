@@ -6,6 +6,10 @@
 @details
 Global navigation available in ANY menu, at any level of depth:
   - Up/Down arrows   move the selection
+  - Mouse click      click a row to select it, click it again to confirm;
+                     wheel scrolls, right-click goes back (needs a terminal
+                     with mouse reporting; silently keyboard-only otherwise,
+                     or set PSVITA_TOOLKIT_NO_MOUSE=1 to force it off)
   - Enter            choose the selected item
   - 1-9              jump directly to options 1-9
   - a, b, c, ...      jump directly to option 10 and beyond (letters skip
@@ -17,17 +21,23 @@ Global navigation available in ANY menu, at any level of depth:
   - 0 / Q            go back one level (returns to the menu that called this one)
   - M                jump directly to the MAIN menu from anywhere
   - Ctrl+C           same as 'M' while navigating (never kills the process abruptly)
+  - R                after an option finishes (or fails), run it again
+
+Rendering is repaint-in-place (cursor home + redraw, no scrollback purge),
+so navigation doesn't flicker; a terminal resize redraws immediately.
 
 `select_list()` shares the same rendering/navigation core as `run_menu()` --
 it is the picker used for "choose one of these VPKs/dumps/profiles"-style
 lists throughout the toolkit, so every selectable list in the app gets the
-same shortcuts, search, and look for free.
+same shortcuts, search, mouse, and look for free.
 
 See `docs/dev-notes/tui.md` for the rationale behind avoiding `curses`, the
 `termios`-based `getch()`, and the exception-based navigation model.
 """
 
+import contextlib
 import glob
+import io
 import os
 import re
 import select
@@ -47,9 +57,9 @@ STRINGS = {
         "pt": "Pressione ENTER para continuar...",
     },
     "tui.footer_hint": {
-        "es": "↑/↓ mover · Enter elegir · 1-9,a-z salto directo · / buscar · 0/Q volver · M menú principal · Ctrl+C salir",
-        "en": "↑/↓ move · Enter select · 1-9,a-z jump · / search · 0/Q back · M main menu · Ctrl+C exit",
-        "pt": "↑/↓ mover · Enter selecionar · 1-9,a-z atalho · / buscar · 0/Q voltar · M menu principal · Ctrl+C sair",
+        "es": "↑/↓ o click mover · Enter o doble-click elegir · rueda scroll · click-der volver · 1-9,a-z salto · / buscar · 0/Q volver · M principal",
+        "en": "↑/↓ or click move · Enter or double-click select · wheel scrolls · right-click back · 1-9,a-z jump · / search · 0/Q back · M main",
+        "pt": "↑/↓ ou clique mover · Enter ou duplo-clique escolher · roda rola · botão-dir voltar · 1-9,a-z atalho · / buscar · 0/Q voltar · M principal",
     },
     "tui.footer_hint_search": {
         "es": "↑/↓ mover · Enter elegir · Backspace borrar/salir · Esc o Ctrl+C salir de la búsqueda",
@@ -95,6 +105,16 @@ STRINGS = {
         "es": "No es un directorio: {path}",
         "en": "Not a directory: {path}",
         "pt": "Não é um diretório: {path}",
+    },
+    "tui.after_action": {
+        "es": "Enter volver al menú · R repetir esta opción",
+        "en": "Enter back to menu · R run this option again",
+        "pt": "Enter voltar ao menu · R repetir esta opção",
+    },
+    "tui.after_action_failed": {
+        "es": "La opción falló -- R reintentar · Enter volver al menú",
+        "en": "The option failed -- R retry · Enter back to menu",
+        "pt": "A opção falhou -- R tentar de novo · Enter voltar ao menu",
     },
 }
 i18n.register(STRINGS)
@@ -159,11 +179,17 @@ def term_width(default=80):
     return shutil.get_terminal_size((default, 24)).columns
 
 
-def getch():
+def getch(wake=None):
     """!
     @brief Read a single character or escape sequence without waiting for Enter.
-    @return The character read, or the full escape sequence for an arrow/function
+    @param wake Optional zero-arg predicate polled every ~250ms while waiting
+           (e.g. "did the terminal get resized?"); when it returns true,
+           `getch()` gives up and returns `None`. Raw mode stays on the whole
+           time, so keys/clicks arriving mid-wait are never echoed or lost.
+    @return `None` if `wake()` fired with no key pressed, else the character read, or the full escape sequence for an arrow/function
             key (e.g. `"\\x1b[A"` or `"\\x1bOA"` for Up arrow, `"\\x1b"` for lone Escape).
+            SGR mouse reports (`"\\x1b[<Cb;x;yM/m"`) arrive whole: if a sequence
+            looks truncated, up to ~50ms is spent waiting for its tail.
     @note macOS/Linux raw terminal read using os.read(fd) directly to prevent
           Python's TextIOWrapper buffer from swallowing multi-byte escape bursts.
     """
@@ -173,7 +199,18 @@ def getch():
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        raw = os.read(fd, 32)
+        if wake is not None:
+            while not select.select([fd], [], [], 0.25)[0]:
+                if wake():
+                    return None
+        raw = os.read(fd, 64)
+        # A mouse report split across two reads would otherwise be dropped as
+        # garbage -- if it looks like an unfinished SGR sequence, wait briefly
+        # for the rest instead.
+        if re.match(r"^\x1b\[<\d*(;\d*){0,2}$", raw.decode("utf-8", errors="replace")):
+            ready, _, _ = select.select([fd], [], [], 0.05)
+            if ready:
+                raw += os.read(fd, 64)
         try:
             return raw.decode("utf-8", errors="replace")
         except Exception:
@@ -190,6 +227,35 @@ def pause(msg=None):
         pass
 
 
+def _after_action_prompt(failed=False):
+    """!
+    @brief Post-action pause that also offers re-running the same option.
+    @param failed Whether the action just raised -- only changes the wording.
+    @return `True` if the user pressed R (run it again), `False` to go back.
+    @note Every menu action gets this for free via `run_menu()`, so an option
+          that fails on a flaky thing (FTP, a console that isn't listening
+          yet, a half-written file) can be retried without navigating back
+          to it -- no per-action retry plumbing needed.
+    """
+    if not sys.stdin.isatty():
+        pause()
+        return False
+    key = "tui.after_action_failed" if failed else "tui.after_action"
+    color = C.YELLOW if failed else C.BOLD
+    print(f"\n{C.DIM}[ {C.RESET}{color}{t(key)}{C.RESET}{C.DIM} ]{C.RESET}")
+    while True:
+        try:
+            c = getch()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if c in ("r", "R"):
+            return True
+        if c in ("m", "M"):
+            raise GoToMainMenu()
+        if c in ("\r", "\n", "\x03", "\x1b", "0", "q", "Q", " "):
+            return False
+
+
 def confirm(prompt, default=True):
     yes_letter = "y" if i18n.get_language() == "en" else "s"
     suffix = f"[{yes_letter.upper()}/n]" if default else f"[{yes_letter}/N]"
@@ -202,8 +268,15 @@ def confirm(prompt, default=True):
     return raw in ("s", "si", "sí", "sim", "y", "yes")
 
 
+def _banner_inner_width(cols):
+    """!
+    @brief Width between the banner's corner glyphs, so the box never wraps.
+    """
+    return max(10, min(cols - 2, 78))
+
+
 def print_banner(title, subtitle=None, breadcrumb=None):
-    width = min(term_width(), 78)
+    width = _banner_inner_width(term_width())
     bar = "═" * width
     print(f"{C.CYAN}{C.BOLD}╔{bar}╗{C.RESET}")
     print(f"{C.CYAN}{C.BOLD}║{C.RESET}{C.BOLD}{title.center(width)}{C.RESET}{C.CYAN}{C.BOLD}║{C.RESET}")
@@ -219,6 +292,182 @@ def _footer_hint(search_mode=False):
     print()
     key = "tui.footer_hint_search" if search_mode else "tui.footer_hint"
     print(f"{C.DIM}{t(key)}{C.RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Mouse support (SGR 1006). Best-effort: terminals without mouse reporting
+# simply never emit these sequences, and the keyboard path is untouched.
+# ---------------------------------------------------------------------------
+
+_MOUSE_ENABLE = "\033[?1000h\033[?1006h"
+_MOUSE_DISABLE = "\033[?1006l\033[?1000l"
+_MOUSE_SGR_RE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
+
+_BTN_LEFT, _BTN_MIDDLE, _BTN_RIGHT = 0, 1, 2
+_BTN_WHEEL_UP, _BTN_WHEEL_DOWN = 64, 65
+
+
+def _mouse_supported():
+    """!
+    @brief Whether to ask the terminal for mouse reports.
+    @return `False` on dumb terms, non-TTYs, or with PSVITA_TOOLKIT_NO_MOUSE=1.
+    """
+    if os.environ.get("PSVITA_TOOLKIT_NO_MOUSE"):
+        return False
+    term = os.environ.get("TERM", "")
+    return (sys.stdout.isatty() and sys.stdin.isatty()
+            and term not in ("", "dumb", "unknown"))
+
+
+def _split_mouse_events(chunk):
+    """!
+    @brief Split SGR mouse reports out of a raw `getch()` chunk.
+    @param chunk Raw string as returned by `getch()` (may hold a click press +
+           its release, or mouse bytes glued to a keypress).
+    @return `(events, rest)` where `events` is a list of `(button, x, y)`
+            tuples (releases already filtered out) and `rest` is any
+            non-mouse remainder to handle as a normal key.
+    """
+    events = []
+    rest = chunk
+    for m in _MOUSE_SGR_RE.finditer(chunk):
+        btn, x, y, kind = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+        rest = rest.replace(m.group(0), "", 1)
+        if kind == "m":
+            continue  # button release -- the press already did the work
+        btn &= ~32  # ignore the drag-motion modifier bit
+        events.append((btn, x, y))
+    return events, rest
+
+
+def _visible_len(text):
+    """!
+    @brief Printable width of a line, ignoring ANSI color codes.
+    """
+    return len(_strip_ansi(text))
+
+
+def _build_frame(title, labels, visible, idx, width, height, search_mode, query,
+                 breadcrumb="", subtitle=None, header_lines=None, win_start=0):
+    """!
+    @brief Render one menu frame into a list of plain strings.
+    @param labels All item labels, in order.
+    @param visible Indices into `labels` currently shown (all of them, or the
+           search-filtered subset).
+    @param idx Position inside `visible` currently highlighted.
+    @param width Terminal width for wrap accounting.
+    @param height Terminal height; when the item block doesn't fit, only a
+           window around `idx` is rendered with `··· N more ···` indicators.
+    @param header_lines Captured `header_extra` output lines (no trailing blank).
+    @param win_start Preferred window start (visible position); adjusted so
+           `idx` stays on screen.
+    @return `(frame, item_rows, win_start)` where `frame` holds every line to
+            print, `item_rows` is a list of `(visible_pos, screen_row)` for
+            each rendered item (0-based screen row, wrap-aware) closed by a
+            `(None, end_row)` sentinel -- see `_click_pos()` -- and
+            `win_start` is the adjusted window start to carry over.
+    """
+    import math
+    inner = _banner_inner_width(width)
+    bar = "═" * inner
+    prefix = [
+        f"{C.CYAN}{C.BOLD}╔{bar}╗{C.RESET}",
+        f"{C.CYAN}{C.BOLD}║{C.RESET}{C.BOLD}{title.center(inner)}{C.RESET}{C.CYAN}{C.BOLD}║{C.RESET}",
+    ]
+    if subtitle:
+        prefix.append(f"{C.CYAN}{C.BOLD}║{C.RESET}{C.DIM}{subtitle.center(inner)}{C.RESET}{C.CYAN}{C.BOLD}║{C.RESET}")
+    prefix.append(f"{C.CYAN}{C.BOLD}╚{bar}╝{C.RESET}")
+    if breadcrumb:
+        prefix.append(f"{C.DIM}{breadcrumb}{C.RESET}")
+    prefix.append("")
+    if header_lines is not None:
+        prefix.extend(header_lines)
+        prefix.append("")
+
+    item_lines = []  # (visible_pos, rendered_line)
+    if not visible:
+        item_lines.append((-1, f"  {C.DIM}{t('tui.search_no_matches') if search_mode and query else t('tui.no_items')}{C.RESET}"))
+    elif search_mode:
+        prefix.append(f"{C.BOLD}{Icons.SEARCH} {C.RESET}{query}{C.DIM}_{C.RESET}")
+        prefix.append("")
+        for pos, orig_i in enumerate(visible):
+            if pos == idx:
+                item_lines.append((pos, f"{C.CYAN}{C.BOLD}\033[7m {Icons.POINTER_BOLD}     {labels[orig_i]} {C.RESET}"))
+            else:
+                item_lines.append((pos, f"      {labels[orig_i]}"))
+    else:
+        for pos, orig_i in enumerate(visible):
+            shortcut = _shortcut_for_index(orig_i)
+            pfx = f"{shortcut:>2}. " if shortcut else "    "
+            if pos == idx:
+                item_lines.append((pos, f"{C.CYAN}{C.BOLD}\033[7m {Icons.POINTER_BOLD} {pfx}{labels[orig_i]} {C.RESET}"))
+            else:
+                item_lines.append((pos, f"  {pfx}{labels[orig_i]}"))
+
+    suffix = ["", f"{C.DIM}{t('tui.footer_hint_search' if search_mode else 'tui.footer_hint')}{C.RESET}"]
+
+    # Window the item block so huge lists render fast and clicks map right.
+    def rows_of(line):
+        return max(1, math.ceil(max(_visible_len(line), 1) / max(width, 1)))
+
+    row_counts = [rows_of(line) for _, line in item_lines]
+    fixed_rows = sum(rows_of(line) for line in prefix) + sum(rows_of(line) for line in suffix)
+    avail = max(5, height - fixed_rows - 2)  # 2 spare for indicators
+    total_rows = sum(row_counts)
+    if total_rows <= avail or not visible:
+        win = item_lines
+        above = below = 0
+    else:
+        win_start = min(max(0, win_start), max(0, len(item_lines) - 1))
+        if idx < win_start:
+            win_start = idx
+        while win_start <= idx:
+            if sum(row_counts[win_start:idx + 1]) <= avail:
+                break
+            win_start += 1
+        win, used = [], 0
+        for pos, line in item_lines[win_start:]:
+            need = row_counts[win_start + len(win)]
+            if used + need > avail:
+                break
+            win.append((pos, line))
+            used += need
+        above = win_start
+        below = len(item_lines) - win_start - len(win)
+
+    # Track SCREEN rows (not frame lines): a breadcrumb or header line wider
+    # than the terminal wraps, and click mapping must account for that.
+    frame = list(prefix)
+    screen_row = sum(rows_of(line) for line in prefix)
+    if above:
+        frame.append(f"{C.DIM}··· ↑ {above} more ···{C.RESET}")
+        screen_row += 1
+    item_rows = []
+    for pos, line in win:
+        item_rows.append((pos, screen_row))
+        frame.append(line)
+        screen_row += rows_of(line)
+    # Sentinel end row so the last item's wrapped span is clickable too.
+    item_rows.append((None, screen_row))
+    if below:
+        frame.append(f"{C.DIM}··· ↓ {below} more ···{C.RESET}")
+    frame.extend(suffix)
+    return frame, item_rows, win_start
+
+
+def _click_pos(item_rows, row_1based):
+    """!
+    @brief Map a clicked 1-based screen row to a position in the visible list.
+    @param item_rows `(visible_pos, screen_row)` pairs from `_build_frame()`,
+           ending with a `(None, end_row)` sentinel.
+    @return Visible position, or `None` when the click landed outside any item.
+            A wrapped continuation line still counts as its item's row span.
+    """
+    line = row_1based - 1
+    for (pos, start), (_next, end) in zip(item_rows, item_rows[1:]):
+        if start <= line < end:
+            return pos
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -279,58 +528,89 @@ def _navigate(title, labels, breadcrumb="", subtitle=None, header_extra=None, se
     @return Zero-based index into `labels` the user picked, or `None` if they
             backed out (0/Q, or Backspace-from-empty-query in search mode).
     @note Raises `GoToMainMenu` on 'M' or Ctrl+C, from either mode.
+    @note Frames repaint in place (cursor home, no scrollback purge) instead of
+          a full clear per keypress, and mouse clicks/wheel work when the
+          terminal reports them -- see `_mouse_supported()`.
     """
     n = len(labels)
     idx = 0
     search_mode = False
     query = ""
     filtered = list(range(n))
+    pending = []
+    win_start = 0
 
+    # Capture header_extra once per menu (it is display-only by contract in
+    # every caller), so each frame knows exactly which rows the items start on
+    # for click mapping -- and so slow headers (FTP status, asset counts)
+    # don't re-run on every single keypress.
+    header_lines = None
+    if header_extra is not None:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            header_extra()
+        header_lines = buf.getvalue().splitlines()
+
+    mouse = _mouse_supported()
     sys.stdout.write("\033[?25l")
+    if mouse:
+        sys.stdout.write(_MOUSE_ENABLE)
     sys.stdout.flush()
     try:
         while True:
-            clear()
-            print_banner(title, subtitle=subtitle, breadcrumb=breadcrumb)
-            if header_extra:
-                header_extra()
-                print()
+            width = term_width()
+            height = shutil.get_terminal_size((80, 24)).lines
+            visible = filtered if search_mode else list(range(n))
+            if idx >= len(visible):
+                idx = max(0, len(visible) - 1)
+            frame, item_rows, win_start = _build_frame(
+                title, labels, visible, idx, width, height, search_mode, query,
+                breadcrumb=breadcrumb, subtitle=subtitle, header_lines=header_lines,
+                win_start=win_start)
+            sys.stdout.write("\033[H" + "\033[K\n".join(frame) + "\033[K\033[J")
+            sys.stdout.flush()
 
-            if n == 0:
-                print(f"  {C.DIM}{t('tui.no_items')}{C.RESET}")
-            elif search_mode:
-                print(f"{C.BOLD}{Icons.SEARCH} {C.RESET}{query}{C.DIM}_{C.RESET}")
-                print()
-                if not filtered:
-                    print(f"  {C.DIM}{t('tui.search_no_matches')}{C.RESET}")
-                for pos, orig_i in enumerate(filtered):
-                    if pos == idx:
-                        print(f"{C.CYAN}{C.BOLD}\033[7m {Icons.POINTER_BOLD}     {labels[orig_i]} {C.RESET}")
-                    else:
-                        print(f"      {labels[orig_i]}")
+            if pending:
+                c = pending.pop(0)
             else:
-                for i, label in enumerate(labels):
-                    shortcut = _shortcut_for_index(i)
-                    prefix = f"{shortcut:>2}. " if shortcut else "    "
-                    if i == idx:
-                        print(f"{C.CYAN}{C.BOLD}\033[7m {Icons.POINTER_BOLD} {prefix}{label} {C.RESET}")
-                    else:
-                        print(f"  {prefix}{label}")
+                # Poll so a terminal resize redraws right away instead of
+                # waiting for the next keypress.
+                size = shutil.get_terminal_size((80, 24))
+                try:
+                    c = getch(wake=lambda: shutil.get_terminal_size((80, 24)) != size)
+                except (EOFError, KeyboardInterrupt):
+                    raise GoToMainMenu()
+                if c is None:
+                    continue
 
-            _footer_hint(search_mode=search_mode)
-
-            try:
-                c = getch()
-            except (EOFError, KeyboardInterrupt):
-                raise GoToMainMenu()
+            events, rest = _split_mouse_events(c) if mouse else ([], c)
+            if events and rest:
+                pending.append(rest)
+                rest = ""
+            for btn, _x, y in events:
+                if btn == _BTN_WHEEL_UP:
+                    if visible:
+                        idx = max(0, idx - 3)
+                elif btn == _BTN_WHEEL_DOWN:
+                    if visible:
+                        idx = min(len(visible) - 1, idx + 3)
+                elif btn == _BTN_RIGHT:
+                    return None
+                elif btn == _BTN_LEFT:
+                    pos = _click_pos(item_rows, y)
+                    if pos is not None and pos >= 0:
+                        if pos == idx:
+                            return visible[idx]
+                        idx = pos
+            if events and not rest:
+                continue
+            c = rest
 
             if search_mode:
                 if c in ("\x03", "\x1b", "\x1b\x1b"):
                     search_mode = False
                 elif c in ("\r", "\n", "\x1b[C", "\x1bOC"):
                     if filtered:
-                        sys.stdout.write("\033[?25h")
-                        sys.stdout.flush()
                         return filtered[idx]
                 elif c in ("\x7f", "\x08"):
                     if query:
@@ -383,8 +663,6 @@ def _navigate(title, labels, breadcrumb="", subtitle=None, header_extra=None, se
             elif c in ("\x1b[F", "\x1b[4~", "\x1b[8~"):  # End
                 idx = n - 1
             elif c in ("\r", "\n", "\x1b[C", "\x1bOC"):  # Enter or Right Arrow
-                sys.stdout.write("\033[?25h")
-                sys.stdout.flush()
                 return idx
             elif c in ("0", "q", "Q", "\x1b", "\x1b[D", "\x1bOD"):  # Back / Left Arrow
                 return None
@@ -400,6 +678,8 @@ def _navigate(title, labels, breadcrumb="", subtitle=None, header_extra=None, se
                 if target is not None:
                     idx = target
     finally:
+        if mouse:
+            sys.stdout.write(_MOUSE_DISABLE)
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()
 
@@ -410,7 +690,8 @@ def run_menu(title, items, breadcrumb="", subtitle=None, header_extra=None):
     @param title Banner title.
     @param items List of `(label: str, callback: callable | None)` tuples.
            `callback()` runs when that item is chosen; its return value is
-           ignored. Raise `GoToMainMenu()` from a callback to return to the
+           ignored. Afterwards the user can press R to run it again (retry
+           after a failure, or just repeat a deploy/log fetch). Raise `GoToMainMenu()` from a callback to return to the
            main menu, or `ExitApp()` to quit. `callback is None` marks an
            explicit "back" item (same as pressing 0/Q on it).
     @param breadcrumb Optional breadcrumb line shown under the banner.
@@ -432,19 +713,24 @@ def run_menu(title, items, breadcrumb="", subtitle=None, header_extra=None):
             return None
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()
-        clear()
-        print(f"{C.GREEN}{C.BOLD}{Icons.POINTER_BOLD} {label}{C.RESET}\n")
-        try:
-            cb()
-        except MenuResult as result:
-            return result.value
-        except (GoToMainMenu, ExitApp, SwitchProject):
-            raise
-        except KeyboardInterrupt:
-            print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
-        except Exception as e:  # noqa: BLE001 -- the menu must never die from an action's error
-            print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
-        pause()
+        while True:
+            clear()
+            print(f"{C.GREEN}{C.BOLD}{Icons.POINTER_BOLD} {label}{C.RESET}\n")
+            failed = False
+            try:
+                cb()
+            except MenuResult as result:
+                return result.value
+            except (GoToMainMenu, ExitApp, SwitchProject):
+                raise
+            except KeyboardInterrupt:
+                print(f"\n{C.YELLOW}{t('tui.interrupted')}{C.RESET}")
+                failed = True
+            except Exception as e:  # noqa: BLE001 -- the menu must never die from an action's error
+                print(f"\n{C.RED}{t('tui.unexpected_error', error=e)}{C.RESET}")
+                failed = True
+            if not _after_action_prompt(failed=failed):
+                break
 
 
 def select_list(title, entries, label_fn=str, breadcrumb="", subtitle=None, header_extra=None, searchable=True):
