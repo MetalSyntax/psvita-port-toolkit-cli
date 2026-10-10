@@ -19,12 +19,14 @@ here instead of inline in `__main__.py`.
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from . import i18n
 from .i18n import t
 from . import config as cfgmod
+from .tui import C
 
 
 def _fail(msg):
@@ -118,13 +120,30 @@ def build_parser():
     p_analyze.add_argument("--so-base", help="Runtime base address of the .so, hex (e.g. 0x98000000).")
 
 
-    p_init = sub.add_parser("init", help="Create a new port from an Android .apk (non-interactive).")
-    p_init.add_argument("--apk", required=True, help="Path to the source .apk.")
-    p_init.add_argument("--name", required=True, help="Display game name.")
+    p_init = sub.add_parser("init", help="Create a new port from an Android .apk (non-interactive) or resume an existing one.")
+    p_init.add_argument("--apk", help="Path to the source .apk (required unless resuming with --project).")
+    p_init.add_argument("--name", help="Display game name.")
     p_init.add_argument("--titleid", help="9-character TITLEID (required unless resuming this project's own).")
     p_init.add_argument("--slug", help="Internal slug (default: derived from --name).")
     p_init.add_argument("--folder", help="Destination folder name under base_dir (default: derived from --name).")
     p_init.add_argument("--vita-ip", default="192.168.1.100", help="Test PS Vita IP (default: 192.168.1.100).")
+    p_init.add_argument("--project", help="Path to an existing or incomplete port directory to resume/complete.")
+    p_init.add_argument("--skip-ghidra", action="store_true", help="Skip Ghidra headless decompiler for .so files.")
+    p_init.add_argument("--skip-jadx", action="store_true", help="Skip jadx Java decompiler.")
+    p_init.add_argument("--resume", action="store_true", help="Resume/complete an incomplete port.")
+
+    p_check = sub.add_parser("check-port", help="Audit if a port directory is complete or missing files/plans/steps.")
+    p_check.add_argument("--project", help="Path to the port directory (default: current directory).")
+
+    p_repair = sub.add_parser("repair-port", help="Audit and complete an incomplete port (create missing plans, config, git, skills, etc.).")
+    p_repair.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_repair.add_argument("--skip-ghidra", action="store_true", help="Skip Ghidra decompilation if not yet completed.")
+    p_repair.add_argument("--skip-jadx", action="store_true", help="Skip jadx decompilation.")
+
+    p_complete = sub.add_parser("complete-port", help="Alias for repair-port: audit and complete an incomplete port.")
+    p_complete.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_complete.add_argument("--skip-ghidra", action="store_true", help="Skip Ghidra decompilation if not yet completed.")
+    p_complete.add_argument("--skip-jadx", action="store_true", help="Skip jadx decompilation.")
 
     p_livearea = sub.add_parser("livearea", help="Convert LiveArea assets without the interactive picker.")
     p_livearea.add_argument("--project", help="Path to the port directory (default: current directory).")
@@ -392,8 +411,8 @@ def _cmd_analyze(args):
 
 def _cmd_init(args):
     """!
-    @brief `init` subcommand handler: create a new port non-interactively.
-    @param args Parsed CLI args (`apk`, `name`, `titleid`, `slug`, `folder`, `vita_ip`).
+    @brief `init` subcommand handler: create a new port non-interactively or resume an existing one.
+    @param args Parsed CLI args.
     @return `1` on missing global config or invalid input, else `0`.
     """
     from . import init_port
@@ -401,15 +420,96 @@ def _cmd_init(args):
     if err:
         return _fail(err)
     i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+
+    project_path = getattr(args, "project", None)
+    if not project_path and getattr(args, "folder", None) and global_cfg.get("base_dir"):
+        candidate = Path(global_cfg["base_dir"]) / args.folder
+        if candidate.is_dir() and getattr(args, "resume", False):
+            project_path = str(candidate)
+
+    if project_path:
+        try:
+            project_cfg = init_port.complete_port(
+                project_path,
+                global_cfg=global_cfg,
+                skip_ghidra=args.skip_ghidra,
+                skip_jadx=args.skip_jadx,
+            )
+            print(f"[+] Port completado en {project_cfg['_project_dir']}")
+            return 0
+        except RuntimeError as e:
+            return _fail(str(e))
+
+    if not args.apk:
+        return _fail("Path to .apk is required when creating a new port (--apk <path>)")
+    if not args.name:
+        return _fail("Game name is required (--name <name>)")
+
     try:
         project_cfg = init_port.run_wizard_headless(
             global_cfg, apk_path=args.apk, game_name=args.name, titleid=args.titleid,
             slug=args.slug, folder_name=args.folder, vita_ip=args.vita_ip,
+            skip_ghidra=args.skip_ghidra, skip_jadx=args.skip_jadx,
         )
     except RuntimeError as e:
         return _fail(str(e))
     print(f"[+] Port created at {project_cfg['_project_dir']}")
     return 0
+
+
+def _cmd_check_port(args):
+    """!
+    @brief `check-port` subcommand handler: audit completeness of a port directory.
+    @param args Parsed CLI args (`project`).
+    @return `0` if complete, `1` if incomplete or error.
+    """
+    from . import init_port
+    global_cfg, err = _load_global_config()
+    if err:
+        return _fail(err)
+    i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+    project_dir = args.project or os.getcwd()
+    res = init_port.check_port_completeness(project_dir)
+    print(f"\n{C.BOLD}=== Chequeo de completitud de port: {project_dir} ==={C.RESET}")
+    if res["is_complete"]:
+        print(f"{C.GREEN}[+] El port está COMPLETO. Todos los componentes y planes existen.{C.RESET}\n")
+    else:
+        print(f"{C.YELLOW}[!] El port está INCOMPLETO.{C.RESET}")
+        print(f"{C.YELLOW}Elementos faltantes ({len(res['missing'])}):{C.RESET}")
+        for m in res["missing"]:
+            print(f"  [-] {m}")
+        print()
+    print(f"{C.BOLD}Detalle por componente:{C.RESET}")
+    for k, v in res["details"].items():
+        status = f"{C.GREEN}OK{C.RESET}" if v else f"{C.RED}FALTA{C.RESET}"
+        print(f"  [{status}] {k}")
+    print()
+    return 0 if res["is_complete"] else 1
+
+
+def _cmd_repair_port(args):
+    """!
+    @brief `repair-port` / `complete-port` subcommand handler: audit and complete an incomplete port.
+    @param args Parsed CLI args (`project`, `skip_ghidra`, `skip_jadx`).
+    @return `0` on success, `1` on error.
+    """
+    from . import init_port
+    global_cfg, err = _load_global_config()
+    if err:
+        return _fail(err)
+    i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+    project_dir = args.project or os.getcwd()
+    try:
+        project_cfg = init_port.complete_port(
+            project_dir,
+            global_cfg=global_cfg,
+            skip_ghidra=args.skip_ghidra,
+            skip_jadx=args.skip_jadx,
+        )
+        print(f"{C.GREEN}[+] Port reparado y completado en {project_cfg['_project_dir']}{C.RESET}")
+        return 0
+    except RuntimeError as e:
+        return _fail(str(e))
 
 
 def _cmd_livearea(args):
@@ -947,6 +1047,9 @@ _HANDLERS = {
     "shader-live-reload": _cmd_shader_live_reload,
     "log-standard": _cmd_log_standard,
     "log-trace": _cmd_log_trace,
+    "check-port": _cmd_check_port,
+    "repair-port": _cmd_repair_port,
+    "complete-port": _cmd_repair_port,
 }
 
 

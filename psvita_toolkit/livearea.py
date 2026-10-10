@@ -368,6 +368,31 @@ STRINGS = {
         "en": "[-] Fix what's marked before packaging.",
         "pt": "[-] Corrija o que está marcado com antes de empacotar.",
     },
+    "livearea.ask_ai_upscale": {
+        "es": "¿Deseas mejorar / escalar la imagen con IA (Real-ESRGAN)?",
+        "en": "Do you want to enhance / upscale the image with AI (Real-ESRGAN)?",
+        "pt": "Deseja melhorar / escalar a imagem com IA (Real-ESRGAN)?",
+    },
+    "livearea.ask_ai_upscale_batch": {
+        "es": "¿Deseas mejorar las imágenes con IA (Real-ESRGAN) en este lote?",
+        "en": "Do you want to enhance images with AI (Real-ESRGAN) in this batch?",
+        "pt": "Deseja melhorar as imagens com IA (Real-ESRGAN) neste lote?",
+    },
+    "livearea.ai_upscaling": {
+        "es": "  [*] Mejorando imagen con Real-ESRGAN (GPU / Super-Resolution)...",
+        "en": "  [*] Enhancing image with Real-ESRGAN (GPU / Super-Resolution)...",
+        "pt": "  [*] Melhorando imagem com Real-ESRGAN (GPU / Super-Resolution)...",
+    },
+    "livearea.ai_upscaled": {
+        "es": "  [+] Imagen mejorada con IA: {orig_w}x{orig_h} -> {new_w}x{new_h}",
+        "en": "  [+] Image enhanced with AI: {orig_w}x{orig_h} -> {new_w}x{new_h}",
+        "pt": "  [+] Imagem melhorada com IA: {orig_w}x{orig_h} -> {new_w}x{new_h}",
+    },
+    "livearea.ai_failed": {
+        "es": "  [!] No se pudo aplicar el upscaler con IA ({error}). Se continuará con la imagen original.",
+        "en": "  [!] Could not apply AI upscaler ({error}). Continuing with original image.",
+        "pt": "  [!] Não foi possível aplicar o upscaler com IA ({error}). Continuando com a imagem original.",
+    },
 }
 i18n.register(STRINGS)
 
@@ -734,6 +759,60 @@ def _pick_mode():
     return chosen[0] if chosen else "crop"
 
 
+def _find_upscaler():
+    candidates = [
+        shutil.which("vita-upscale"),
+        shutil.which("realesrgan"),
+        str(Path.home() / ".local" / "bin" / "vita-upscale"),
+        str(Path.home() / ".local" / "bin" / "realesrgan"),
+        str(Path.home() / ".local" / "share" / "realesrgan" / "realesrgan-ncnn-vulkan"),
+    ]
+    for c in candidates:
+        if c and Path(c).is_file() and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def _has_upscaler():
+    return _find_upscaler() is not None
+
+
+def _do_ai_upscale(src_path):
+    upscaler = _find_upscaler()
+    if not upscaler:
+        return None
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix="_upscaled.png", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+
+    print(f"{C.CYAN}{t('livearea.ai_upscaling')}{C.RESET}")
+    try:
+        if "vita-upscale" in Path(upscaler).name or ("realesrgan" in Path(upscaler).name and not upscaler.endswith("vulkan")):
+            cmd = [upscaler, "-i", str(src_path), "-o", str(tmp_path), "-s", "4"]
+        else:
+            models_dir = Path(upscaler).parent / "models"
+            cmd = [upscaler, "-i", str(src_path), "-o", str(tmp_path), "-s", "4", "-t", "0", "-m", str(models_dir), "-n", "realesrgan-x4plus"]
+
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode == 0 and tmp_path.exists():
+            with Image.open(tmp_path) as up_img, Image.open(src_path) as orig_img:
+                print(f"{C.GREEN}{t('livearea.ai_upscaled', orig_w=orig_img.size[0], orig_h=orig_img.size[1], new_w=up_img.size[0], new_h=up_img.size[1])}{C.RESET}")
+            return str(tmp_path)
+        else:
+            err = (res.stderr or res.stdout).strip()
+            print(f"{C.YELLOW}{t('livearea.ai_failed', error=err)}{C.RESET}")
+            if tmp_path.exists():
+                tmp_path.unlink()
+            return None
+    except Exception as e:
+        print(f"{C.YELLOW}{t('livearea.ai_failed', error=str(e))}{C.RESET}")
+        if tmp_path.exists():
+            tmp_path.unlink()
+        return None
+
+
 def _asset_flow(asset_type, dest_dir):
     spec = VITA_SPECS[asset_type]
     print(f"\n{C.BOLD}{t('livearea.asset_flow_header', filename=spec['filename'], desc=t(spec['desc']))}{C.RESET}")
@@ -744,14 +823,29 @@ def _asset_flow(asset_type, dest_dir):
     try:
         with Image.open(raw) as test_img:
             print(f"  {C.GREEN}{t('livearea.image_loaded', width=test_img.size[0], height=test_img.size[1], format=test_img.format, mode=test_img.mode)}{C.RESET}")
+            img_w, img_h = test_img.size
     except Exception as e:
         print(f"{C.RED}{t('livearea.image_read_error', error=e)}{C.RESET}")
         return
+
+    upscaled_path = None
+    if _has_upscaler():
+        default_ai = (img_w < spec["width"] or img_h < spec["height"])
+        if tui.confirm(t("livearea.ask_ai_upscale"), default=default_ai):
+            upscaled_path = _do_ai_upscale(raw)
+
+    working_image = upscaled_path if upscaled_path else raw
     mode = _pick_mode()
     try:
-        process_asset(raw, asset_type, dest_dir, mode=mode, dither=True, backup=True)
+        process_asset(working_image, asset_type, dest_dir, mode=mode, dither=True, backup=True)
     except Exception as e:
         print(f"{C.RED}{t('livearea.conversion_error', error=e)}{C.RESET}")
+    finally:
+        if upscaled_path and Path(upscaled_path).exists():
+            try:
+                Path(upscaled_path).unlink()
+            except OSError:
+                pass
 
 
 def livearea_menu(project_cfg):
@@ -763,15 +857,29 @@ def livearea_menu(project_cfg):
 
     def batch_flow():
         print(f"\n{C.BOLD}{t('livearea.batch_title')}{C.RESET}")
+        use_ai_all = False
+        if _has_upscaler():
+            use_ai_all = tui.confirm(t("livearea.ask_ai_upscale_batch"), default=True)
+
         for atype in VITA_SPECS:
             spec = VITA_SPECS[atype]
             raw = tui.input_path(t("livearea.batch_image_prompt", filename=spec['filename'], name=t(spec['name'])), allow_blank=True)
             if not raw:
                 continue
+            upscaled_path = None
+            if use_ai_all:
+                upscaled_path = _do_ai_upscale(raw)
+            working_image = upscaled_path if upscaled_path else raw
             try:
-                process_asset(raw, atype, dest_dir, mode="crop", dither=True, backup=True)
+                process_asset(working_image, atype, dest_dir, mode="crop", dither=True, backup=True)
             except Exception as e:
                 print(f"{C.RED}{t('livearea.batch_error', filename=spec['filename'], error=e)}{C.RESET}")
+            finally:
+                if upscaled_path and Path(upscaled_path).exists():
+                    try:
+                        Path(upscaled_path).unlink()
+                    except OSError:
+                        pass
 
     def do_template():
         generate_template_xml(dest_dir)

@@ -849,23 +849,35 @@ def _list_entries(ftp, path):
     @param ftp Connected `ftplib.FTP` instance.
     @param path Remote directory to list.
     @return list of `(name, is_dir, mtime_or_None)` tuples.
-    @note Calls `cwd()` first (fails clearly if the path doesn't exist), then tries `MLSD`
-          and falls back to plain `LIST` -- passing the full path as an argument to `LIST`
-          confuses VitaShell's ftpd.
+    @note Calls `cwd()` first (fails clearly if the path doesn't exist), then uses `LIST`.
+          VitaShell's ftpd does NOT support `MLSD` (RFC 3659); attempting MLSD opens and
+          aborts a data connection, exhausting VitaShell's socket pool and causing
+          Errno 61 (Connection refused) on the subsequent LIST.
     """
     ftp.cwd(path)
-    entries = []
-    try:
-        for name, facts in ftp.mlsd():
-            if name in (".", ".."):
-                continue
-            mtime = facts.get("modify")
-            entries.append((name, facts.get("type") == "dir", mtime))
-        return entries
-    except all_errors:
-        pass
     lines = []
-    ftp.retrlines("LIST", lines.append)
+    try:
+        ftp.retrlines("LIST", lines.append)
+    except (socket.error, OSError) as e:
+        # Check if VitaShell returned port 65535 (Vita OS socket exhaustion)
+        try:
+            _, port = ftp.makepasv()
+            if port == 65535:
+                raise OSError(
+                    "[Errno 61] VitaShell ha agotado sus sockets internos (puerto PASV 65535).\n"
+                    "(Pista: En la PS Vita presiona CÍRCULO para cerrar el FTP en VitaShell y luego SELECT para reactivarlo)"
+                ) from e
+        except OSError:
+            raise
+        except Exception:
+            pass
+
+        # VitaShell's ftpd may need a moment to recycle its data socket
+        time.sleep(0.25)
+        lines = []
+        ftp.retrlines("LIST", lines.append)
+
+    entries = []
     for line in lines:
         parts = line.split(None, 8)
         if len(parts) < 9:
@@ -1160,13 +1172,20 @@ def upload_ux0_data_dir(project_cfg, global_cfg, non_interactive=False):
 
 def _quit(ftp):
     """!
-    @brief Best-effort FTP QUIT, swallowing any error.
+    @brief Best-effort FTP QUIT, swallowing any error and ensuring socket closure without hanging.
     @param ftp Connected `ftplib.FTP` instance to close.
     """
+    if not ftp:
+        return
     try:
+        if getattr(ftp, "sock", None):
+            ftp.sock.settimeout(1.0)
         ftp.quit()
     except Exception:
-        pass
+        try:
+            ftp.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -1549,11 +1568,12 @@ def _local_screenshots_dir(project_cfg):
     return d
 
 
-def _list_remote_screenshot_files(ftp, path):
+def _list_remote_screenshot_files(ftp, path, is_root=True):
     """!
     @brief Recursively walk `path` collecting screenshot files.
     @param ftp Connected `ftplib.FTP` instance.
     @param path Remote directory to walk (absolute).
+    @param is_root Whether `path` is the top-level screenshots directory.
     @return list of `(relpath, mtime)` tuples, `relpath` relative to `path` (using `/`
             as separator, e.g. `"a1B2c3D4/00000001.jpg"`), unsorted.
     @note The Vita doesn't drop screenshots directly in `ux0:picture/SCREENSHOT/` --
@@ -1562,9 +1582,17 @@ def _list_remote_screenshot_files(ftp, path):
           would find nothing.
     """
     results = []
-    for name, is_dir, mtime in _list_entries(ftp, path):
+    try:
+        entries = _list_entries(ftp, path)
+    except all_errors:
+        if is_root:
+            raise
+        return results
+
+    for name, is_dir, mtime in entries:
         if is_dir:
-            for rel, sub_mtime in _list_remote_screenshot_files(ftp, f"{path}/{name}"):
+            time.sleep(0.04)  # Pace connections so VitaShell can tear down data sockets
+            for rel, sub_mtime in _list_remote_screenshot_files(ftp, f"{path}/{name}", is_root=False):
                 results.append((f"{name}/{rel}", sub_mtime))
         elif name.lower().endswith(_SCREENSHOT_EXTS):
             results.append((name, mtime))

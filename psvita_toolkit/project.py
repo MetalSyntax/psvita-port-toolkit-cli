@@ -271,10 +271,18 @@ def _select_from_list(global_cfg):
 
 
 def _open_project(project_dir):
+    from . import init_port
     project_dir = Path(project_dir).expanduser().resolve()
     cfg = cfgmod.load_project_config(project_dir)
     if cfg is None:
         cfg = _adopt_project(project_dir)
+    audit = init_port.check_port_completeness(project_dir)
+    if audit["is_incomplete"]:
+        print(f"\n{C.YELLOW}[!] El port tiene elementos incompletos ({len(audit['missing'])} faltantes):{C.RESET}")
+        for m in audit["missing"]:
+            print(f"    - {m}")
+        if tui.confirm("\n¿Deseas completar y reparar los elementos faltantes ahora?", default=True):
+            cfg = init_port.complete_port(project_dir)
     cfgmod.remember_project(project_dir)
     return cfg
 

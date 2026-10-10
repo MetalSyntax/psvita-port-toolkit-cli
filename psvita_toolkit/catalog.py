@@ -88,6 +88,16 @@ CATALOG = [
                 "en": "Takes an Android .apk, detects ABI and GLES, decompiles with jadx + Ghidra, and leaves a fresh git repo with PORTING_PLAN.md ready to start porting.",
                 "pt": "Recebe um .apk Android, detecta ABI e GLES, decompila com jadx + Ghidra, e deixa um repo git novo com PORTING_PLAN.md pronto para começar a portar.",
             }},
+            {"name": "check-port", "tags": [], "desc": {
+                "es": "Audita si un port está completo o si le faltan archivos, planes (PORTING_PLAN.md, port_progress.md, CLAUDE.md), git, .gitignore anti-DMCA, configuración o decompilaciones.",
+                "en": "Audits whether a port is complete or missing files, plans (PORTING_PLAN.md, port_progress.md, CLAUDE.md), git, anti-DMCA .gitignore, config, or decompilations.",
+                "pt": "Audita se um port está completo ou se faltam arquivos, planos (PORTING_PLAN.md, port_progress.md, CLAUDE.md), git, .gitignore anti-DMCA, configuração ou descompilações.",
+            }},
+            {"name": "repair-port", "tags": [], "desc": {
+                "es": "Detecta qué le falta a un port incompleto o interrumpido y genera/agrega todo lo que falte (planes, git, skills, configuración, JNI) permitiendo saltar Ghidra.",
+                "en": "Detects what is missing in an incomplete or interrupted port and generates/adds everything needed (plans, git, skills, config, JNI) allowing skipping Ghidra.",
+                "pt": "Detecta o que falta em um port incompleto ou interrompido e gera/adiciona tudo o que falta (planos, git, skills, configuração, JNI) permitindo pular o Ghidra.",
+            }},
             {"name": {"es": "selector de proyecto", "en": "project selector", "pt": "seletor de projeto"}, "tags": [], "desc": {
                 "es": "Al abrir el TUI: seguir con el último port, elegir otro de los que hay bajo tu carpeta base, o adoptar uno viejo detectando IP/TITLEID automáticamente.",
                 "en": "On opening the TUI: continue with the last port, pick another one from your base folder, or adopt an old one with IP/TITLEID auto-detected.",

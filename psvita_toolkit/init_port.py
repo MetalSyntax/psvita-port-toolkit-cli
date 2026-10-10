@@ -21,6 +21,7 @@ script this way, and the real bugs fixed in `_same_file()`,
 `_merge_tree_no_clobber()`, and the TITLEID-reuse flow in `prompt_inputs()`.
 """
 
+import json
 import os
 import re
 import shutil
@@ -370,6 +371,41 @@ STRINGS = {
         "en": "[!] Skipping .so decompilation (docker/image not available) -- run manually afterward.",
         "pt": "[!] Decompilação de .so ignorada (docker/imagem não disponíveis) -- executar manualmente depois.",
     },
+    "init_port.so_decompile_skipped_flag": {
+        "es": "[*] Saltando decompilación con Ghidra (--skip-ghidra).",
+        "en": "[*] Skipping Ghidra decompilation (--skip-ghidra).",
+        "pt": "[*] Pulando descompilação com Ghidra (--skip-ghidra).",
+    },
+    "init_port.so_decompile_interrupted": {
+        "es": "[!] Decompilación con Ghidra interrumpida por el usuario (Ctrl+C). Continuando con el resto del port...",
+        "en": "[!] Ghidra decompilation interrupted by user (Ctrl+C). Continuing with remaining port steps...",
+        "pt": "[!] Decompilação com Ghidra interrompida pelo usuário (Ctrl+C). Continuando com as etapas restantes do port...",
+    },
+    "init_port.jadx_already_done": {
+        "es": "[+] Java ya decompilado en decompiled/apk_jadx (reutilizando).",
+        "en": "[+] Java already decompiled in decompiled/apk_jadx (reusing).",
+        "pt": "[+] Java já descompilado em decompiled/apk_jadx (reutilizando).",
+    },
+    "init_port.jadx_interrupted": {
+        "es": "[!] Decompilación Java con jadx interrumpida por el usuario (Ctrl+C). Continuando...",
+        "en": "[!] Java decompilation with jadx interrupted by user (Ctrl+C). Continuing...",
+        "pt": "[!] Decompilação Java com jadx interrompida pelo usuário (Ctrl+C). Continuando...",
+    },
+    "init_port.completing_port": {
+        "es": "[*] Auditando y completando port en {path}...",
+        "en": "[*] Auditing and completing port at {path}...",
+        "pt": "[*] Auditando e completando port em {path}...",
+    },
+    "init_port.port_complete_ok": {
+        "es": "[+] Port completado con éxito.",
+        "en": "[+] Port completed successfully.",
+        "pt": "[+] Port completado com sucesso.",
+    },
+    "init_port.prompt_skip_ghidra": {
+        "es": "¿Deseas decompilar librerías .so con Ghidra ahora (puede tardar varios minutos)?",
+        "en": "Decompile .so libraries with Ghidra now (may take several minutes)?",
+        "pt": "Descompilar bibliotecas .so com Ghidra agora (pode levar vários minutos)?",
+    },
     "init_port.git_init_start": {
         "es": "[*] git init + .gitignore anti-DMCA...",
         "en": "[*] git init + anti-DMCA .gitignore...",
@@ -485,40 +521,277 @@ STRINGS = {
         "en": "APK decompiled (jadx) and .so file(s) decompiled (Ghidra) -- see section 2/3.",
         "pt": "APK decompilado (jadx) e .so decompilado(s) (Ghidra) -- ver seção 2/3.",
     },
-    "init_port.plan_check_engine": {
-        "es": "Análisis del motor real (ciclo de vida nativo, reuso de otro port o boilerplate genérico).",
-        "en": "Analysis of the real engine (native lifecycle, reuse from another port or generic boilerplate).",
-        "pt": "Análise do motor real (ciclo de vida nativo, reuso de outro port ou boilerplate genérico).",
+    "init_port.plan_phases_intro": {
+        "es": "Una fase por área. Marcar cada ítem solo cuando esté **confirmado en consola real** (no en teoría).\nLas fases 7, 9 y 12-14 incluyen los extras de la escena (ver ports de TheFlow, Rinnegatamante, v-atamanenko).",
+        "en": "One phase per area. Tick an item only once it is **confirmed on real hardware** (not in theory).\nPhases 7, 9 and 12-14 include the scene extras (see ports by TheFlow, Rinnegatamante, v-atamanenko).",
+        "pt": "Uma fase por área. Marcar cada item só quando estiver **confirmado em hardware real** (não na teoria).\nAs fases 7, 9 e 12-14 incluem os extras da cena (ver ports de TheFlow, Rinnegatamante, v-atamanenko).",
     },
-    "init_port.plan_check_bootstrap": {
-        "es": "Bootstrap del loader: so_file_load/so_relocate/so_resolve, primer build.",
-        "en": "Loader bootstrap: so_file_load/so_relocate/so_resolve, first build.",
-        "pt": "Bootstrap do loader: so_file_load/so_relocate/so_resolve, primeiro build.",
+    "init_port.plan_phase1_title": {
+        "es": "Fase 1: Configuración y preparación",
+        "en": "Phase 1: Setup and preparation",
+        "pt": "Fase 1: Configuração e preparação",
     },
-    "init_port.plan_check_jni_table": {
-        "es": 'Tabla JNI (FalsoJNI): registrar exports + callbacks hacia "Java".',
-        "en": 'JNI table (FalsoJNI): register exports + callbacks toward "Java".',
-        "pt": 'Tabela JNI (FalsoJNI): registrar exports + callbacks para o "Java".',
+    "init_port.plan_phase2_title": {
+        "es": "Fase 2: Decompilación",
+        "en": "Phase 2: Decompilation",
+        "pt": "Fase 2: Decompilação",
     },
-    "init_port.plan_check_first_boot": {
-        "es": "Primer arranque en consola real.",
-        "en": "First boot on real hardware.",
-        "pt": "Primeira inicialização em hardware real.",
+    "init_port.plan_phase3": {
+        "es": """### Fase 3: Análisis del motor real
+- [ ] Identificar el motor por símbolos (`nm -D`/`objdump -T`), sin asumir "mismo motor que otro port".
+- [ ] Mapear el ciclo de vida nativo (`JNI_OnLoad`, `nativeInit`, `onSurfaceCreated`, `nativeRender`, `onPause/onResume`) -- `psvita-toolkit jni-analyze`.
+- [ ] Detectar middleware (FMOD, OpenAL, Bink, libpng, zlib, curl) y decidir stub vs. implementación.
+- [ ] Decidir base: reuso de otro port de la misma familia (`sync-shared`) o boilerplate genérico.
+- [ ] Revisar riesgos de alineación de memoria -- `psvita-toolkit align-check`.""",
+        "en": """### Phase 3: Real engine analysis
+- [ ] Identify the engine by symbols (`nm -D`/`objdump -T`), never assume "same engine as another port".
+- [ ] Map the native lifecycle (`JNI_OnLoad`, `nativeInit`, `onSurfaceCreated`, `nativeRender`, `onPause/onResume`) -- `psvita-toolkit jni-analyze`.
+- [ ] Detect middleware (FMOD, OpenAL, Bink, libpng, zlib, curl) and decide stub vs. implementation.
+- [ ] Pick a base: reuse from a same-family port (`sync-shared`) or the generic boilerplate.
+- [ ] Review memory-alignment risks -- `psvita-toolkit align-check`.""",
+        "pt": """### Fase 3: Análise do motor real
+- [ ] Identificar o motor por símbolos (`nm -D`/`objdump -T`), sem assumir "mesmo motor de outro port".
+- [ ] Mapear o ciclo de vida nativo (`JNI_OnLoad`, `nativeInit`, `onSurfaceCreated`, `nativeRender`, `onPause/onResume`) -- `psvita-toolkit jni-analyze`.
+- [ ] Detectar middleware (FMOD, OpenAL, Bink, libpng, zlib, curl) e decidir stub vs. implementação.
+- [ ] Decidir a base: reuso de um port da mesma família (`sync-shared`) ou boilerplate genérico.
+- [ ] Revisar riscos de alinhamento de memória -- `psvita-toolkit align-check`.""",
     },
-    "init_port.plan_check_graphics": {
-        "es": "Gráficos (wrappers GL según versión detectada).",
-        "en": "Graphics (GL wrappers per detected version).",
-        "pt": "Gráficos (wrappers GL conforme a versão detectada).",
+    "init_port.plan_phase4": {
+        "es": """### Fase 4: Bootstrap del loader y JNI
+- [ ] `so_file_load` / `so_relocate` / `so_resolve` sin símbolos sin resolver críticos.
+- [ ] Tabla de imports por defecto (libc, pthread, math) + stubs para lo no usado.
+- [ ] FalsoJNI: registrar exports `Java_*` / `RegisterNatives` y callbacks hacia "Java" (paths, idioma, versión, toasts).
+- [ ] Primer build (`psvita-toolkit build`) y deploy (`psvita-toolkit deploy`).
+- [ ] Primer arranque en consola real: llega a `nativeInit` sin crash (si crashea: `psvita-toolkit analyze` + skill `so-crash-triage`).
+- [ ] Logger conforme a la sección 6 desde el primer día.""",
+        "en": """### Phase 4: Loader and JNI bootstrap
+- [ ] `so_file_load` / `so_relocate` / `so_resolve` with no critical unresolved symbols.
+- [ ] Default import table (libc, pthread, math) + stubs for what is unused.
+- [ ] FalsoJNI: register `Java_*` exports / `RegisterNatives` and callbacks toward "Java" (paths, language, version, toasts).
+- [ ] First build (`psvita-toolkit build`) and deploy (`psvita-toolkit deploy`).
+- [ ] First boot on real hardware: reaches `nativeInit` without crashing (if it crashes: `psvita-toolkit analyze` + `so-crash-triage` skill).
+- [ ] Logger compliant with section 6 from day one.""",
+        "pt": """### Fase 4: Bootstrap do loader e JNI
+- [ ] `so_file_load` / `so_relocate` / `so_resolve` sem símbolos críticos não resolvidos.
+- [ ] Tabela de imports padrão (libc, pthread, math) + stubs para o que não é usado.
+- [ ] FalsoJNI: registrar exports `Java_*` / `RegisterNatives` e callbacks para o "Java" (paths, idioma, versão, toasts).
+- [ ] Primeiro build (`psvita-toolkit build`) e deploy (`psvita-toolkit deploy`).
+- [ ] Primeira inicialização em hardware real: chega a `nativeInit` sem crash (se crashar: `psvita-toolkit analyze` + skill `so-crash-triage`).
+- [ ] Logger conforme a seção 6 desde o primeiro dia.""",
     },
-    "init_port.plan_check_input_audio": {
-        "es": "Input, Audio, Assets, LiveArea/VPK.",
-        "en": "Input, Audio, Assets, LiveArea/VPK.",
-        "pt": "Input, Audio, Assets, LiveArea/VPK.",
+    "init_port.plan_phase5": {
+        "es": """### Fase 5: Gráficos
+- [ ] Inicializar vitaGL con memoria adecuada (`vglInitExtended`) y resolución 960x544.
+- [ ] Wrappers GL según la versión GLES detectada (sección 1); stubs para extensiones no soportadas.
+- [ ] Shaders: GLSL→CG o GXP precompilados (`psvita-toolkit shader-transpile`, `shader-live-reload`).
+- [ ] Texturas: formatos comprimidos (ETC1/PVRTC/DXT) convertidos o soportados (`psvita-toolkit transcode-assets`).
+- [ ] Escalado/aspect ratio correcto y sin artefactos en UI ni fuentes.""",
+        "en": """### Phase 5: Graphics
+- [ ] Initialize vitaGL with adequate memory (`vglInitExtended`) at 960x544.
+- [ ] GL wrappers per the detected GLES version (section 1); stubs for unsupported extensions.
+- [ ] Shaders: GLSL→CG or precompiled GXP (`psvita-toolkit shader-transpile`, `shader-live-reload`).
+- [ ] Textures: compressed formats (ETC1/PVRTC/DXT) converted or supported (`psvita-toolkit transcode-assets`).
+- [ ] Correct scaling/aspect ratio, no UI or font artifacts.""",
+        "pt": """### Fase 5: Gráficos
+- [ ] Inicializar o vitaGL com memória adequada (`vglInitExtended`) em 960x544.
+- [ ] Wrappers GL conforme a versão GLES detectada (seção 1); stubs para extensões não suportadas.
+- [ ] Shaders: GLSL→CG ou GXP pré-compilados (`psvita-toolkit shader-transpile`, `shader-live-reload`).
+- [ ] Texturas: formatos comprimidos (ETC1/PVRTC/DXT) convertidos ou suportados (`psvita-toolkit transcode-assets`).
+- [ ] Escala/aspect ratio corretos, sem artefatos na UI nem nas fontes.""",
     },
-    "init_port.plan_check_hardware": {
-        "es": "Pruebas en hardware real.",
-        "en": "Tests on real hardware.",
-        "pt": "Testes em hardware real.",
+    "init_port.plan_phase6": {
+        "es": """### Fase 6: Táctil
+- [ ] Pantalla frontal → eventos touch del juego (multitouch, coordenadas escaladas a la resolución del motor).
+- [ ] Ocultar o hacer opcional el gamepad virtual en pantalla cuando hay controles físicos.
+- [ ] Panel trasero: decidir uso (L2/R2, ver Fase 7) o desactivarlo para evitar toques accidentales.""",
+        "en": """### Phase 6: Touch
+- [ ] Front screen → game touch events (multitouch, coordinates scaled to the engine resolution).
+- [ ] Hide or make optional the on-screen virtual gamepad when physical controls exist.
+- [ ] Rear panel: decide its use (L2/R2, see Phase 7) or disable it to avoid accidental touches.""",
+        "pt": """### Fase 6: Toque
+- [ ] Tela frontal → eventos touch do jogo (multitouch, coordenadas escaladas para a resolução do motor).
+- [ ] Ocultar ou tornar opcional o gamepad virtual na tela quando há controles físicos.
+- [ ] Painel traseiro: decidir o uso (L2/R2, ver Fase 7) ou desativá-lo para evitar toques acidentais.""",
+    },
+    "init_port.plan_phase7": {
+        "es": """### Fase 7: Controles físicos
+- [ ] Mapeo por defecto "Vita mejorado": D-pad, sticks, ✕○□△, L/R, START/SELECT con acción real en el juego.
+- [ ] Stick analógico → movimiento/cámara (con aceleración si el juego lo espera).
+- [ ] Deadzone interna (~8-12) y sensibilidad con defaults sanos.
+- [ ] `controls.txt` remapeable en `<DATA_PATH>` (`VITA_BOTON = ACCION_JUEGO`); si falta, usar el mapeo por defecto.
+- [ ] L2/R2 = panel trasero arriba, L3/R3 = frontal abajo (alternativa conmutable para PSTV).
+- [ ] Ningún botón muerto: asignar acciones útiles (mapa, poción, guardado rápido).
+- [ ] PSTV probado con DS3/DS4, o declarado en el README.
+- [ ] Tabla de controles documentada en el README.""",
+        "en": """### Phase 7: Physical controls
+- [ ] "Enhanced Vita" default mapping: D-pad, sticks, ✕○□△, L/R, START/SELECT with a real in-game action.
+- [ ] Analog stick → movement/camera (with acceleration if the game expects it).
+- [ ] Inner deadzone (~8-12) and sensitivity with sane defaults.
+- [ ] Remappable `controls.txt` in `<DATA_PATH>` (`VITA_BUTTON = GAME_ACTION`); if missing, use the default mapping.
+- [ ] L2/R2 = rear panel top, L3/R3 = front bottom (toggleable alternative for PSTV).
+- [ ] No dead buttons: assign useful actions (map, potion, quick save).
+- [ ] PSTV tested with DS3/DS4, or stated in the README.
+- [ ] Controls table documented in the README.""",
+        "pt": """### Fase 7: Controles físicos
+- [ ] Mapeamento padrão "Vita melhorado": D-pad, sticks, ✕○□△, L/R, START/SELECT com ação real no jogo.
+- [ ] Stick analógico → movimento/câmera (com aceleração se o jogo esperar).
+- [ ] Deadzone interna (~8-12) e sensibilidade com defaults sensatos.
+- [ ] `controls.txt` remapeável em `<DATA_PATH>` (`BOTAO_VITA = ACAO_JOGO`); se faltar, usar o mapeamento padrão.
+- [ ] L2/R2 = painel traseiro em cima, L3/R3 = frontal embaixo (alternativa alternável para PSTV).
+- [ ] Nenhum botão morto: atribuir ações úteis (mapa, poção, salvamento rápido).
+- [ ] PSTV testado com DS3/DS4, ou declarado no README.
+- [ ] Tabela de controles documentada no README.""",
+    },
+    "init_port.plan_phase8": {
+        "es": """### Fase 8: Audio
+- [ ] Backend de audio (OpenSL ES / OpenAL / FMOD / AudioTrack vía JNI) mapeado a `sceAudioOut` o la lib del port.
+- [ ] Música y efectos suenan sin crujidos ni desfase (sample rate y formato correctos).
+- [ ] Pausa/reanudación del audio al suspender la consola o salir al LiveArea.
+- [ ] Volumen de música/efectos respetado.""",
+        "en": """### Phase 8: Audio
+- [ ] Audio backend (OpenSL ES / OpenAL / FMOD / AudioTrack via JNI) mapped to `sceAudioOut` or the port's lib.
+- [ ] Music and SFX play without crackling or drift (correct sample rate and format).
+- [ ] Audio pauses/resumes on console suspend or return to LiveArea.
+- [ ] Music/SFX volume settings respected.""",
+        "pt": """### Fase 8: Áudio
+- [ ] Backend de áudio (OpenSL ES / OpenAL / FMOD / AudioTrack via JNI) mapeado para `sceAudioOut` ou a lib do port.
+- [ ] Música e efeitos tocam sem estalos nem dessincronia (sample rate e formato corretos).
+- [ ] Pausa/retomada do áudio ao suspender o console ou voltar ao LiveArea.
+- [ ] Volume de música/efeitos respeitado.""",
+    },
+    "init_port.plan_phase9": {
+        "es": """### Fase 9: Videos / FMV
+- [ ] Inventariar videos del APK/OBB (intro, cinemáticas, créditos) y su formato.
+- [ ] Reproducir con el player de Vita (`sceAvPlayer`) o transcodificar a MP4 H.264 compatible.
+- [ ] Script de transcodificación opcional (ffmpeg `.sh`/`.bat`) para el jugador.
+- [ ] Skip con botón y **skip elegante si el video falta** (nunca colgar ni pantalla negra).
+- [ ] Audio del video sincronizado y restaurado al volver al juego.""",
+        "en": """### Phase 9: Videos / FMV
+- [ ] Inventory the APK/OBB videos (intro, cutscenes, credits) and their format.
+- [ ] Play with the Vita player (`sceAvPlayer`) or transcode to compatible H.264 MP4.
+- [ ] Optional transcode script (ffmpeg `.sh`/`.bat`) for the player.
+- [ ] Button skip and a **graceful skip when the video is missing** (never hang or black screen).
+- [ ] Video audio in sync and restored when returning to the game.""",
+        "pt": """### Fase 9: Vídeos / FMV
+- [ ] Inventariar os vídeos do APK/OBB (intro, cinemáticas, créditos) e seu formato.
+- [ ] Reproduzir com o player do Vita (`sceAvPlayer`) ou transcodificar para MP4 H.264 compatível.
+- [ ] Script de transcodificação opcional (ffmpeg `.sh`/`.bat`) para o jogador.
+- [ ] Skip por botão e **skip elegante se o vídeo faltar** (nunca travar nem tela preta).
+- [ ] Áudio do vídeo sincronizado e restaurado ao voltar ao jogo.""",
+    },
+    "init_port.plan_phase10": {
+        "es": """### Fase 10: Assets, datos, idioma y saves
+- [ ] Redirigir rutas Android (`/sdcard`, `getFilesDir`, OBB) a `<DATA_PATH>`.
+- [ ] Checker al arrancar: si falta el `.so` o los assets, diálogo con la ruta exacta (no crash mudo).
+- [ ] `datafiles.zip` separado del VPK para assets convertibles (texturas, shaders).
+- [ ] Idioma = idioma del sistema (`sceAppUtilSystemParamGetById`) con fallback a inglés.
+- [ ] Saves en `<DATA_PATH>saves/`; documentar cómo importar un save de Android.
+- [ ] Guardado rápido al salir + reanudar el último save (si el juego lo permite).""",
+        "en": """### Phase 10: Assets, data, language and saves
+- [ ] Redirect Android paths (`/sdcard`, `getFilesDir`, OBB) to `<DATA_PATH>`.
+- [ ] Boot checker: if the `.so` or assets are missing, show a dialog with the exact path (no silent crash).
+- [ ] `datafiles.zip` separate from the VPK for convertible assets (textures, shaders).
+- [ ] Language = system language (`sceAppUtilSystemParamGetById`) with English fallback.
+- [ ] Saves in `<DATA_PATH>saves/`; document how to import an Android save.
+- [ ] Quick save on exit + resume last save (if the game allows it).""",
+        "pt": """### Fase 10: Assets, dados, idioma e saves
+- [ ] Redirecionar caminhos Android (`/sdcard`, `getFilesDir`, OBB) para `<DATA_PATH>`.
+- [ ] Checker na inicialização: se faltar o `.so` ou os assets, diálogo com o caminho exato (sem crash mudo).
+- [ ] `datafiles.zip` separado do VPK para assets conversíveis (texturas, shaders).
+- [ ] Idioma = idioma do sistema (`sceAppUtilSystemParamGetById`) com fallback para inglês.
+- [ ] Saves em `<DATA_PATH>saves/`; documentar como importar um save do Android.
+- [ ] Salvamento rápido ao sair + retomar o último save (se o jogo permitir).""",
+    },
+    "init_port.plan_phase11": {
+        "es": """### Fase 11: Rendimiento
+- [ ] Relojes 444/222/222/166 al arrancar + nota "PSVshell a 500 MHz opcional" en el README.
+- [ ] Cache de shaders en disco (primer arranque lento, siguientes rápidos) -- documentado.
+- [ ] FPS estable medido con frame time (`psvita-toolkit perf-telemetry`), sin prometer 60 FPS que el motor no da.
+- [ ] Memoria bajo control (`psvita-toolkit mem-profile`) y sesión larga sin fugas (`psvita-toolkit soak-test`).""",
+        "en": """### Phase 11: Performance
+- [ ] 444/222/222/166 clocks at boot + "optional PSVshell at 500 MHz" note in the README.
+- [ ] On-disk shader cache (slow first boot, fast afterwards) -- documented.
+- [ ] Stable FPS measured by frame time (`psvita-toolkit perf-telemetry`), never promising 60 FPS the engine can't do.
+- [ ] Memory under control (`psvita-toolkit mem-profile`) and a long session without leaks (`psvita-toolkit soak-test`).""",
+        "pt": """### Fase 11: Desempenho
+- [ ] Clocks 444/222/222/166 na inicialização + nota "PSVshell a 500 MHz opcional" no README.
+- [ ] Cache de shaders em disco (primeira inicialização lenta, seguintes rápidas) -- documentado.
+- [ ] FPS estável medido por frame time (`psvita-toolkit perf-telemetry`), sem prometer 60 FPS que o motor não entrega.
+- [ ] Memória sob controle (`psvita-toolkit mem-profile`) e sessão longa sem vazamentos (`psvita-toolkit soak-test`).""",
+    },
+    "init_port.plan_phase12": {
+        "es": """### Fase 12: Configurador y opciones
+- [ ] `settings.bin` persistente (`source/utils/settings.c` del boilerplate).
+- [ ] App configuradora lanzada con el botón **Settings** del LiveArea (redirect `-config`).
+- [ ] Opciones mínimas: deadzones, sensibilidad, FPS lock 30/60/off, overlay táctil on/off.
+- [ ] Opciones gráficas en runtime (detalle, filtro bilinear/nítido) en vez de flags de build.""",
+        "en": """### Phase 12: Configurator and options
+- [ ] Persistent `settings.bin` (boilerplate's `source/utils/settings.c`).
+- [ ] Configurator app launched from the LiveArea **Settings** button (`-config` redirect).
+- [ ] Minimum options: deadzones, sensitivity, FPS lock 30/60/off, touch overlay on/off.
+- [ ] Runtime graphics options (detail, bilinear/sharp filter) instead of build flags.""",
+        "pt": """### Fase 12: Configurador e opções
+- [ ] `settings.bin` persistente (`source/utils/settings.c` do boilerplate).
+- [ ] App configurador aberto pelo botão **Settings** do LiveArea (redirect `-config`).
+- [ ] Opções mínimas: deadzones, sensibilidade, FPS lock 30/60/off, overlay de toque on/off.
+- [ ] Opções gráficas em runtime (detalhe, filtro bilinear/nítido) em vez de flags de build.""",
+    },
+    "init_port.plan_phase13": {
+        "es": """### Fase 13: Trofeos
+- [ ] Lista corta y alcanzable (arranque, primer jefe, fin de capítulo, 100%); nada imposible por bugs conocidos.
+- [ ] `sce_sys/trophy/` con TRP + iconos hi-res, algunos ocultos si el juego original los tenía.
+- [ ] Desbloqueo con llamada real (`sceNpTrophyUnlock`) enganchada a los eventos del juego, no flag local.
+- [ ] Probado en consola: el trofeo aparece y queda registrado.""",
+        "en": """### Phase 13: Trophies
+- [ ] Short, achievable list (boot, first boss, chapter end, 100%); nothing impossible due to known bugs.
+- [ ] `sce_sys/trophy/` with TRP + hi-res icons, some hidden if the original game had them.
+- [ ] Unlock via a real call (`sceNpTrophyUnlock`) hooked to game events, not a local flag.
+- [ ] Tested on console: the trophy pops and is recorded.""",
+        "pt": """### Fase 13: Troféus
+- [ ] Lista curta e alcançável (início, primeiro chefe, fim de capítulo, 100%); nada impossível por bugs conhecidos.
+- [ ] `sce_sys/trophy/` com TRP + ícones hi-res, alguns ocultos se o jogo original tinha.
+- [ ] Desbloqueio com chamada real (`sceNpTrophyUnlock`) ligada aos eventos do jogo, não flag local.
+- [ ] Testado no console: o troféu aparece e fica registrado.""",
+    },
+    "init_port.plan_phase14": {
+        "es": """### Fase 14: LiveArea y VPK
+- [ ] `icon0.png` 128x128, `bg.png` 840x500, `startup.png` 280x158 (8 bits indexados) -- `psvita-toolkit livearea --validate`.
+- [ ] `template.xml` con frames + botón Settings/Config.
+- [ ] Manual en `sce_sys/manual/` y música de fondo opcional.
+- [ ] `param.sfo` con Title ID `{titleid}`, título y versión correctos.
+- [ ] VPK instala sin el warning `0x8010113D`.""",
+        "en": """### Phase 14: LiveArea and VPK
+- [ ] `icon0.png` 128x128, `bg.png` 840x500, `startup.png` 280x158 (8-bit indexed) -- `psvita-toolkit livearea --validate`.
+- [ ] `template.xml` with frames + Settings/Config button.
+- [ ] Manual in `sce_sys/manual/` and optional background music.
+- [ ] `param.sfo` with Title ID `{titleid}`, correct title and version.
+- [ ] VPK installs without the `0x8010113D` warning.""",
+        "pt": """### Fase 14: LiveArea e VPK
+- [ ] `icon0.png` 128x128, `bg.png` 840x500, `startup.png` 280x158 (8 bits indexados) -- `psvita-toolkit livearea --validate`.
+- [ ] `template.xml` com frames + botão Settings/Config.
+- [ ] Manual em `sce_sys/manual/` e música de fundo opcional.
+- [ ] `param.sfo` com Title ID `{titleid}`, título e versão corretos.
+- [ ] VPK instala sem o aviso `0x8010113D`.""",
+    },
+    "init_port.plan_phase15": {
+        "es": """### Fase 15: Pruebas en hardware real y release
+- [ ] Partida completa (o hasta donde llegue) sin crashes; suspender/reanudar la consola sin romper el juego.
+- [ ] Vita 1000/2000 y PSTV (o limitación declarada).
+- [ ] Build de producción: `PORT_TRACE=OFF` o `psvita-toolkit log-trace --remove`.
+- [ ] Parches por firma, no por offset fijo; versiones de APK probadas listadas en el README.
+- [ ] Release: VPK + `gamefiles.txt` + changelog + screenshots + requisitos (kubridge, FdFix, libshacccg).""",
+        "en": """### Phase 15: Real-hardware testing and release
+- [ ] Full playthrough (or as far as it goes) without crashes; console suspend/resume without breaking the game.
+- [ ] Vita 1000/2000 and PSTV (or a stated limitation).
+- [ ] Production build: `PORT_TRACE=OFF` or `psvita-toolkit log-trace --remove`.
+- [ ] Signature-based patches, not fixed offsets; tested APK versions listed in the README.
+- [ ] Release: VPK + `gamefiles.txt` + changelog + screenshots + requirements (kubridge, FdFix, libshacccg).""",
+        "pt": """### Fase 15: Testes em hardware real e release
+- [ ] Jogo completo (ou até onde chegar) sem crashes; suspender/retomar o console sem quebrar o jogo.
+- [ ] Vita 1000/2000 e PSTV (ou limitação declarada).
+- [ ] Build de produção: `PORT_TRACE=OFF` ou `psvita-toolkit log-trace --remove`.
+- [ ] Patches por assinatura, não por offset fixo; versões de APK testadas listadas no README.
+- [ ] Release: VPK + `gamefiles.txt` + changelog + screenshots + requisitos (kubridge, FdFix, libshacccg).""",
     },
     "init_port.plan_section5_title": {
         "es": "5. Herramientas",
@@ -960,10 +1233,13 @@ def prompt_inputs(global_cfg):
     if not tui.confirm(f"\n{t('init_port.confirm_continue')}"):
         raise RuntimeError(t("init_port.cancelled_by_user"))
 
+    skip_ghidra = not tui.confirm(f"\n{t('init_port.prompt_skip_ghidra')}", default=True)
+
     return {
         "game_name": game_name, "slug": slug, "folder_name": folder_name,
         "project_name": project_name, "apk_path": apk_path,
         "vita_ip": vita_ip, "titleid": titleid, "new_dir": new_dir,
+        "skip_ghidra": skip_ghidra,
     }
 
 
@@ -1034,14 +1310,7 @@ def place_apk_and_detect(ctx):
 
     abis_str = ', '.join(abis) or t("init_port.none")
     print(f"\n{t('init_port.abis_found', abis=abis_str)}")
-    if not preferred_abi:
-        arch_note = t("init_port.arch_note_no_abi")
-    elif preferred_abi == "armeabi-v7a":
-        arch_note = t("init_port.arch_note_v7a")
-    else:
-        arch_note = t("init_port.arch_note_v6")
-    if len(abis) > 1:
-        arch_note += t("init_port.arch_note_multi_abi", abis=', '.join(abis), preferred=preferred_abi)
+    arch_note = _arch_note(abis, preferred_abi)
     print(f"[+] {arch_note}")
 
     so_files = []
@@ -1088,7 +1357,7 @@ def place_apk_and_detect(ctx):
     })
 
 
-def decompile(global_cfg, ctx, have_jadx, have_docker_so):
+def decompile(global_cfg, ctx, have_jadx, have_docker_so, skip_ghidra=False, skip_jadx=False):
     new_dir = ctx["new_dir"]
     decompiled_dir = new_dir / "decompiled"
     apk_out_dir = decompiled_dir / "apk_jadx"
@@ -1096,50 +1365,79 @@ def decompile(global_cfg, ctx, have_jadx, have_docker_so):
 
     jadx_ok = False
     gles_final = ctx["gles_hint"]
-    if have_jadx:
+    if skip_jadx:
+        print(f"{C.YELLOW}[*] Se omite decompilación Java con jadx (--skip-jadx).{C.RESET}")
+    elif (apk_out_dir / "resources" / "AndroidManifest.xml").exists() or (apk_out_dir / "sources").exists():
+        print(f"{C.GREEN}{t('init_port.jadx_already_done')}{C.RESET}")
+        jadx_ok = True
+    elif have_jadx:
         print(t("init_port.decompiling_java"))
-        r = subprocess.run(["jadx", "-d", str(apk_out_dir), str(new_dir / ctx["apk_basename"])])
-        jadx_ok = r.returncode == 0
-        print(t("init_port.jadx_ok") if jadx_ok else t("init_port.jadx_errors"))
-
-        manifest_decoded = apk_out_dir / "resources" / "AndroidManifest.xml"
-        if manifest_decoded.exists():
-            text = manifest_decoded.read_text(errors="ignore")
-            m = re.search(r'glEsVersion="([^"]*)"', text)
-            if m:
-                gles_map = {"0x00010000": "GLES1", "65536": "GLES1",
-                            "0x00020000": "GLES2", "131072": "GLES2",
-                            "0x00030000": "GLES3", "196608": "GLES3"}
-                gles_final = gles_map.get(m.group(1), t("init_port.gles_nonstandard", value=m.group(1))) + t("init_port.gles_declared_suffix")
-            else:
-                gles_final = t("init_port.gles_no_manifest_declare", gles_hint=ctx['gles_hint'])
-            m = re.search(r'package="([^"]*)"', text)
-            if m:
-                ctx["java_package"] = m.group(1)
-        else:
-            gles_final = t("init_port.gles_manifest_unreadable", gles_hint=ctx['gles_hint'])
+        try:
+            r = subprocess.run(["jadx", "-d", str(apk_out_dir), str(new_dir / ctx["apk_basename"])])
+            jadx_ok = r.returncode == 0
+            print(t("init_port.jadx_ok") if jadx_ok else t("init_port.jadx_errors"))
+        except KeyboardInterrupt:
+            print(f"\n{C.YELLOW}{t('init_port.jadx_interrupted')}{C.RESET}")
+            jadx_ok = False
     else:
         gles_final = t("init_port.gles_no_jadx", gles_hint=ctx['gles_hint'])
 
+    manifest_decoded = apk_out_dir / "resources" / "AndroidManifest.xml"
+    if manifest_decoded.exists():
+        text = manifest_decoded.read_text(errors="ignore")
+        m = re.search(r'glEsVersion="([^"]*)"', text)
+        if m:
+            gles_map = {"0x00010000": "GLES1", "65536": "GLES1",
+                        "0x00020000": "GLES2", "131072": "GLES2",
+                        "0x00030000": "GLES3", "196608": "GLES3"}
+            gles_final = gles_map.get(m.group(1), t("init_port.gles_nonstandard", value=m.group(1))) + t("init_port.gles_declared_suffix")
+        else:
+            gles_final = t("init_port.gles_no_manifest_declare", gles_hint=ctx['gles_hint'])
+        m = re.search(r'package="([^"]*)"', text)
+        if m:
+            ctx["java_package"] = m.group(1)
+    else:
+        if not gles_final or gles_final == ctx["gles_hint"]:
+            gles_final = t("init_port.gles_no_jadx" if not jadx_ok else "init_port.gles_manifest_unreadable", gles_hint=ctx['gles_hint'])
+
     print(f"\n{t('init_port.gles_final_version', gles=gles_final)}")
 
-    if have_docker_so and ctx["so_files"]:
+    ghidra_ok = False
+    if skip_ghidra:
+        print(f"\n{C.YELLOW}{t('init_port.so_decompile_skipped_flag')}{C.RESET}")
+    elif have_docker_so and ctx.get("so_files"):
         for so_file in ctx["so_files"]:
             abi = so_file.parent.name
             so_out = decompiled_dir / f"{so_file.stem}_{abi}" / "ghidra"
             so_out.mkdir(parents=True, exist_ok=True)
+            if (so_out / "out_ghidra.c").exists() and (so_out / "out_ghidra.c").stat().st_size > 0:
+                print(f"{C.GREEN}[+] {so_file.name} ({abi}) ya tiene decompilación en {so_out / 'out_ghidra.c'}. Reutilizando.{C.RESET}")
+                ghidra_ok = True
+                continue
             print(t("init_port.decompiling_so", name=so_file.name, abi=abi))
-            r = subprocess.run([
-                "docker", "run", "--rm", "--platform", "linux/amd64",
-                "-v", f"{so_file.parent}:/input", "-v", f"{so_out}:/output",
-                "devrvk/so-decompiler", "decompile", f"/input/{so_file.name}", "/output",
-            ])
-            print(t("init_port.so_decompile_ok", path=so_out) if r.returncode == 0 else t("init_port.so_decompile_failed", name=so_file.name))
+            try:
+                r = subprocess.run([
+                    "docker", "run", "--rm", "--platform", "linux/amd64",
+                    "-v", f"{so_file.parent}:/input", "-v", f"{so_out}:/output",
+                    "devrvk/so-decompiler", "decompile", f"/input/{so_file.name}", "/output",
+                ])
+                if r.returncode == 0:
+                    print(t("init_port.so_decompile_ok", path=so_out))
+                    ghidra_ok = True
+                else:
+                    print(t("init_port.so_decompile_failed", name=so_file.name))
+            except KeyboardInterrupt:
+                print(f"\n{C.YELLOW}{t('init_port.so_decompile_interrupted')}{C.RESET}")
+                print(f"{C.YELLOW}[*] Continuando con los siguientes procesos y creación de planes...{C.RESET}")
+                ghidra_ok = False
+                break
     else:
         print(f"{C.YELLOW}{t('init_port.so_decompile_skipped')}{C.RESET}")
 
     ctx["jadx_ok"] = jadx_ok
-    ctx["have_docker_so"] = have_docker_so
+    ctx["have_docker_so"] = have_docker_so and ghidra_ok
+    ctx["ghidra_ok"] = ghidra_ok
+    ctx["ghidra_skipped"] = skip_ghidra or not ghidra_ok
     ctx["gles_final"] = gles_final
 
 
@@ -1210,36 +1508,72 @@ cmake-build-*/
     print(f"{C.GREEN}{t('init_port.gitignore_written')}{C.RESET}")
 
 
+def _arch_note(abis, preferred_abi):
+    if not preferred_abi:
+        note = t("init_port.arch_note_no_abi")
+    elif preferred_abi == "armeabi-v7a":
+        note = t("init_port.arch_note_v7a")
+    else:
+        note = t("init_port.arch_note_v6")
+    if len(abis) > 1:
+        note += t("init_port.arch_note_multi_abi", abis=', '.join(abis), preferred=preferred_abi)
+    return note
+
+
+def _plan_gles(gles_final, declared):
+    """English GLES line for the plan; gles_final itself is in the UI language."""
+    m = re.search(r"GLES\d", gles_final or "")
+    if not m:
+        return t("init_port.gles_undetermined") + " -- confirm with Ghidra / AndroidManifest.xml (glEsVersion)"
+    if declared:
+        return m.group(0) + t("init_port.gles_declared_suffix")
+    return m.group(0) + " (symbol heuristic only -- confirm glEsVersion in AndroidManifest.xml)"
+
+
 def write_plan_and_progress(ctx):
     import datetime
     new_dir = ctx["new_dir"]
     today = datetime.date.today().isoformat()
+    # PORTING_PLAN.md is read by AI agents: always English, whatever the UI language.
+    ui_lang = i18n.get_language()
+    gles_declared = ctx.get("gles_final", "").endswith(t("init_port.gles_declared_suffix"))
+    i18n.set_language("en")
 
     so_list = "".join(
         f"- `{f.relative_to(new_dir)}` ({f.stat().st_size / 1024:.0f} KB)\n"
-        for f in ctx["so_files"]
+        for f in ctx.get("so_files", [])
     ) or t("init_port.plan_so_none")
 
     jni_exports = ""
-    if ctx["so_files"] and _have("objdump"):
-        r = subprocess.run(["objdump", "-T", str(ctx["so_files"][0])], capture_output=True, text=True)
-        names = sorted(set(re.findall(r"Java_\S+", r.stdout)))
-        jni_exports = "".join(f"- `{n}`\n" for n in names)
+    if ctx.get("so_files") and _have("objdump"):
+        all_names = set()
+        for sf in ctx["so_files"]:
+            try:
+                r = subprocess.run(["objdump", "-T", str(sf)], capture_output=True, text=True)
+                all_names.update(re.findall(r"Java_\S+", r.stdout))
+            except Exception:
+                pass
+        if all_names:
+            jni_exports = "".join(f"- `{n}`\n" for n in sorted(all_names))
     if not jni_exports:
         jni_exports = t("init_port.plan_jni_none")
 
-    abis_str = ', '.join(ctx['abis']) or t("init_port.none")
-    package_label = ctx['java_package'] or t("init_port.plan_package_pending")
+    abis_str = ', '.join(ctx.get('abis', [])) or t("init_port.none")
+    package_label = ctx.get('java_package') or t("init_port.plan_package_pending")
 
     plan = f"""# {t('init_port.plan_title', game_name=ctx['game_name'])}
 
 > {t('init_port.plan_intro', today=today)}
 
+> **For AI agents:** this file is the port's source of truth. Work phases in order. Tick `[x]` only
+> after confirming on real hardware and append the evidence (log file, commit, dump) to the item.
+> Never record an engine fact without symbol/decompilation evidence. Keep this file in English.
+
 ## {t('init_port.plan_section0_title')}
 
 - **{t('init_port.plan_game_label')}** {ctx['game_name']}
 - **{t('init_port.plan_package_label')}** {package_label}
-- **{t('init_port.plan_apk_label')}** `{ctx['apk_basename']}`
+- **{t('init_port.plan_apk_label')}** `{ctx.get('apk_basename', '')}`
 - **{t('init_port.plan_titleid_label')}** `{ctx['titleid']}`
 
 {t('init_port.plan_engine_known')}
@@ -1247,11 +1581,11 @@ def write_plan_and_progress(ctx):
 ## {t('init_port.plan_section1_title')}
 
 - **{t('init_port.plan_abi_label')}** {abis_str}
-- **{t('init_port.plan_abi_chosen_label')}** {ctx['preferred_abi'] or 'N/A'}
-- **{t('init_port.plan_arch_note_label')}** {ctx['arch_note']}
-- **{t('init_port.plan_gles_label')}** {ctx['gles_final']}
+- **{t('init_port.plan_abi_chosen_label')}** {ctx.get('preferred_abi') or 'N/A'}
+- **{t('init_port.plan_arch_note_label')}** {_arch_note(ctx.get('abis', []), ctx.get('preferred_abi'))}
+- **{t('init_port.plan_gles_label')}** {_plan_gles(ctx.get('gles_final', ''), gles_declared)}
 
-## {t('init_port.plan_section2_title', abi=ctx['preferred_abi'] or 'N/A')}
+## {t('init_port.plan_section2_title', abi=ctx.get('preferred_abi') or 'N/A')}
 
 {so_list}
 
@@ -1261,15 +1595,15 @@ def write_plan_and_progress(ctx):
 
 ## {t('init_port.plan_section4_title')}
 
+{t('init_port.plan_phases_intro')}
+
+### {t('init_port.plan_phase1_title')}
 - [x] {t('init_port.plan_check_repo')}
-- [x] {t('init_port.plan_check_decompiled')}
-- [ ] {t('init_port.plan_check_engine')}
-- [ ] {t('init_port.plan_check_bootstrap')}
-- [ ] {t('init_port.plan_check_jni_table')}
-- [ ] {t('init_port.plan_check_first_boot')}
-- [ ] {t('init_port.plan_check_graphics')}
-- [ ] {t('init_port.plan_check_input_audio')}
-- [ ] {t('init_port.plan_check_hardware')}
+
+### {t('init_port.plan_phase2_title')}
+- [{'x' if ctx.get('jadx_ok') or ctx.get('have_docker_so') or ctx.get('ghidra_ok') else ' '}] {t('init_port.plan_check_decompiled')}
+
+""" + "\n\n".join(t(f"init_port.plan_phase{n}", titleid=ctx['titleid']) for n in range(3, 16)) + f"""
 
 ## {t('init_port.plan_section5_title')}
 
@@ -1279,6 +1613,7 @@ def write_plan_and_progress(ctx):
 
 {t('init_port.plan_log_text', slug=ctx['slug'])}
 """
+    i18n.set_language(ui_lang)
     (new_dir / "PORTING_PLAN.md").write_text(plan)
     print(f"{C.GREEN}{t('init_port.plan_written')}{C.RESET}")
 
@@ -1286,13 +1621,13 @@ def write_plan_and_progress(ctx):
 
 ## {t('init_port.progress_phase1_title', today=today)}
 - {t('init_port.progress_p1_repo')}
-- {t('init_port.progress_p1_apk', apk=ctx['apk_basename'])}
-- {t('init_port.progress_p1_abi', abis=abis_str, preferred=ctx['preferred_abi'] or 'N/A')}
-- {t('init_port.progress_p1_gles', gles=ctx['gles_final'])}
+- {t('init_port.progress_p1_apk', apk=ctx.get('apk_basename', ''))}
+- {t('init_port.progress_p1_abi', abis=abis_str, preferred=ctx.get('preferred_abi') or 'N/A')}
+- {t('init_port.progress_p1_gles', gles=ctx.get('gles_final', ''))}
 
 ## {t('init_port.progress_phase2_title', today=today)}
-- {t('init_port.progress_p2_jadx_done') if ctx['jadx_ok'] else t('init_port.progress_p2_jadx_pending')}
-- {t('init_port.progress_p2_ghidra_done') if ctx['have_docker_so'] else t('init_port.progress_p2_ghidra_pending')}
+- {t('init_port.progress_p2_jadx_done') if ctx.get('jadx_ok') else t('init_port.progress_p2_jadx_pending')}
+- {t('init_port.progress_p2_ghidra_done') if (ctx.get('have_docker_so') or ctx.get('ghidra_ok')) else t('init_port.progress_p2_ghidra_pending')}
 
 ## {t('init_port.progress_phase3_title')}
 - [ ] {t('init_port.progress_p3_confirm_engine')}
@@ -1308,24 +1643,37 @@ def write_plan_and_progress(ctx):
 
 def write_claude_md_and_skills(global_cfg, ctx):
     new_dir = ctx["new_dir"]
-    skills_source = Path(global_cfg["skills_source"])
+    skills_sources = []
+    if global_cfg.get("skills_source"):
+        skills_sources.append(Path(global_cfg["skills_source"]))
+    skills_sources.extend([
+        Path.home() / ".gemini" / "config" / "skills",
+        Path.home() / ".claude" / "skills",
+        Path("/Volumes/TOSHIBA EXT/PSVITA Develop/psvita-port-toolkit/.claude/skills"),
+    ])
+
     skills_dest = new_dir / ".claude" / "skills"
     skills_dest.mkdir(parents=True, exist_ok=True)
 
     for skill in ("psvita-porting", "so-crash-triage", "psvita-port-init"):
-        src = skills_source / skill
-        if src.is_dir():
+        src = None
+        for candidate_base in skills_sources:
+            cand = candidate_base / skill
+            if cand.is_dir() and (cand / "SKILL.md").exists():
+                src = cand
+                break
+        if src and src.is_dir():
             dst = skills_dest / skill
             if dst.exists():
                 shutil.rmtree(dst)
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("._*"))
             print(f"{C.GREEN}{t('init_port.skill_copied', skill=skill)}{C.RESET}")
         else:
-            print(f"{C.YELLOW}{t('init_port.skill_not_found', skill=skill, source=skills_source)}{C.RESET}")
+            print(f"{C.YELLOW}{t('init_port.skill_not_found', skill=skill, source=global_cfg.get('skills_source', ''))}{C.RESET}")
 
     claude_md = f"""# {t('init_port.claude_md_title', game_name=ctx['game_name'])}
 
-{t('init_port.claude_md_intro', apk=ctx['apk_basename'])}
+{t('init_port.claude_md_intro', apk=ctx.get('apk_basename', ''))}
 
 ## {t('init_port.claude_md_structure_title')}
 
@@ -1340,9 +1688,9 @@ def write_claude_md_and_skills(global_cfg, ctx):
 
 ## {t('init_port.claude_md_findings_title')}
 
-- {t('init_port.claude_md_finding_abi', abis=', '.join(ctx['abis']) or t('init_port.none'), preferred=ctx['preferred_abi'] or 'N/A')}
-- {t('init_port.claude_md_finding_gles', gles=ctx['gles_final'])}
-- {t('init_port.claude_md_finding_package', package=ctx['java_package'] or t('init_port.pending'))}
+- {t('init_port.claude_md_finding_abi', abis=', '.join(ctx.get('abis', [])) or t('init_port.none'), preferred=ctx.get('preferred_abi') or 'N/A')}
+- {t('init_port.claude_md_finding_gles', gles=ctx.get('gles_final', ''))}
+- {t('init_port.claude_md_finding_package', package=ctx.get('java_package') or t('init_port.pending'))}
 
 ## {t('init_port.claude_md_workflow_title')}
 
@@ -1388,6 +1736,400 @@ def write_project_config(ctx):
     return project_cfg
 
 
+def check_port_completeness(project_dir):
+    """!
+    @brief Audits whether a port directory has all required assets, scaffolding,
+           plans, configs, git repos, and decompilations.
+    @param project_dir Path to the port directory.
+    @return dict with completeness analysis.
+    """
+    project_dir = Path(project_dir).resolve()
+    details = {}
+    missing = []
+    present = []
+    metadata = {}
+
+    if not project_dir.is_dir():
+        return {
+            "is_complete": False,
+            "is_incomplete": True,
+            "missing": [f"Directorio no existe: {project_dir}"],
+            "present": [],
+            "details": {},
+            "metadata": {},
+        }
+
+    # 1. Config (.psvita-toolkit.json)
+    cfg_path = project_dir / ".psvita-toolkit.json"
+    has_cfg = cfg_path.is_file()
+    details["config (.psvita-toolkit.json)"] = has_cfg
+    if has_cfg:
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            present.append("Configuración (.psvita-toolkit.json)")
+        except Exception:
+            details["config (.psvita-toolkit.json)"] = False
+            missing.append("Configuración corrupta (.psvita-toolkit.json)")
+    else:
+        missing.append("Configuración (.psvita-toolkit.json)")
+
+    # 2. CMakeLists.txt
+    cmake_path = project_dir / "CMakeLists.txt"
+    has_cmake = cmake_path.is_file()
+    if has_cmake:
+        text = cmake_path.read_text(errors="ignore")
+        m_title = re.search(r'VITA_TITLEID\s+"([A-Za-z0-9]{9})"', text)
+        if m_title and m_title.group(1) != "SOLOADER0":
+            details["CMakeLists.txt (adaptado)"] = True
+            present.append(f"CMakeLists.txt (TITLEID: {m_title.group(1)})")
+            metadata.setdefault("titleid", m_title.group(1))
+        else:
+            details["CMakeLists.txt (adaptado)"] = False
+            missing.append("CMakeLists.txt no adaptado (TITLEID pendiente)")
+        m_app = re.search(r'VITA_APP_NAME\s+"([^"]+)"', text)
+        if m_app:
+            metadata.setdefault("game_name", m_app.group(1))
+        m_proj = re.search(r'project\(([A-Za-z0-9_]+)', text)
+        if m_proj:
+            metadata.setdefault("project_name", m_proj.group(1))
+        m_data = re.search(r'ux0:data/([^/]+)/', text)
+        if m_data:
+            metadata.setdefault("slug", m_data.group(1))
+        m_ip = re.search(r'set\(PSVITAIP\s+"([^"]+)"', text)
+        if m_ip:
+            metadata.setdefault("vita_ip", m_ip.group(1))
+    else:
+        details["CMakeLists.txt (adaptado)"] = False
+        missing.append("CMakeLists.txt")
+
+    # 3. Git repo & .gitignore
+    has_git = (project_dir / ".git").is_dir()
+    details["Git (.git/)"] = has_git
+    if has_git:
+        present.append("Repositorio Git (.git/)")
+    else:
+        missing.append("Repositorio Git (.git/)")
+
+    gitignore_path = project_dir / ".gitignore"
+    has_gitignore = gitignore_path.is_file() and gitignore_path.stat().st_size > 150
+    details[".gitignore anti-DMCA"] = has_gitignore
+    if has_gitignore:
+        present.append(".gitignore con reglas anti-DMCA")
+    else:
+        missing.append(".gitignore completo (anti-DMCA)")
+
+    # 4. Plans and documentation
+    plan_path = project_dir / "PORTING_PLAN.md"
+    has_plan = plan_path.is_file() and plan_path.stat().st_size > 100
+    details["PORTING_PLAN.md"] = has_plan
+    if has_plan:
+        present.append("Plan de port (PORTING_PLAN.md)")
+    else:
+        missing.append("Plan de port (PORTING_PLAN.md)")
+
+    progress_path = project_dir / "port_progress.md"
+    has_progress = progress_path.is_file() and progress_path.stat().st_size > 50
+    details["port_progress.md"] = has_progress
+    if has_progress:
+        present.append("Progreso (port_progress.md)")
+    else:
+        missing.append("Progreso (port_progress.md)")
+
+    claude_path = project_dir / "CLAUDE.md"
+    has_claude = claude_path.is_file() and claude_path.stat().st_size > 50
+    details["CLAUDE.md"] = has_claude
+    if has_claude:
+        present.append("Instrucciones IA (CLAUDE.md)")
+    else:
+        missing.append("Instrucciones IA (CLAUDE.md)")
+
+    skills_dir = project_dir / ".claude" / "skills"
+    has_skills = skills_dir.is_dir() and any((skills_dir / s).is_dir() for s in ("psvita-porting", "so-crash-triage", "psvita-port-init"))
+    details[".claude/skills/"] = has_skills
+    if has_skills:
+        present.append("Habilidades Claude/Antigravity (.claude/skills/)")
+    else:
+        missing.append("Habilidades (.claude/skills/)")
+
+    # 5. Scaffold (source/ and lib/)
+    has_scaffold = (project_dir / "source").is_dir() and (project_dir / "lib").is_dir()
+    details["Scaffold (source/, lib/)"] = has_scaffold
+    if has_scaffold:
+        present.append("Scaffold soloader (source/, lib/)")
+    else:
+        missing.append("Scaffold soloader (source/, lib/)")
+
+    # 6. APK / Extract
+    has_apk = any(f for f in project_dir.glob("*.apk") if not f.name.startswith("._"))
+    extract_dirs = [d for d in project_dir.glob("*_extract") if d.is_dir() and not d.name.startswith("._")]
+    has_extract = bool(extract_dirs and any((d / "lib").is_dir() for d in extract_dirs))
+    details["APK / extract"] = has_apk or has_extract
+    if has_apk or has_extract:
+        present.append("APK original y/o extracción con lib/")
+    else:
+        missing.append("APK o carpeta de extracción *_extract/")
+
+    # 7. Decompiled Java (apk_jadx)
+    jadx_dir = project_dir / "decompiled" / "apk_jadx"
+    has_jadx = jadx_dir.is_dir() and ((jadx_dir / "sources").is_dir() or (jadx_dir / "resources").is_dir())
+    details["Java decompilado (decompiled/apk_jadx)"] = has_jadx
+    if has_jadx:
+        present.append("Java decompilado (decompiled/apk_jadx)")
+    else:
+        missing.append("Java decompilado (decompiled/apk_jadx)")
+
+    # 8. Decompiled Native (ghidra)
+    ghidra_dirs = [d for d in project_dir.glob("decompiled/*/ghidra") if d.is_dir()]
+    has_ghidra = any((d / "out_ghidra.c").is_file() or (d / "out_angr.c").is_file() for d in ghidra_dirs)
+    details["Decompilación nativa (decompiled/*/ghidra)"] = has_ghidra
+    if has_ghidra:
+        present.append("Decompilación nativa (Ghidra)")
+    else:
+        missing.append("Decompilación nativa (Ghidra out_ghidra.c)")
+
+    # 9. JNI analysis documented in plan
+    has_jni_analysis = False
+    if has_plan:
+        plan_text = plan_path.read_text(errors="ignore")
+        if "Auto-detected lifecycle methods" in plan_text or "Exports JNI detectados" in plan_text:
+            has_jni_analysis = True
+    details["Análisis JNI en plan"] = has_jni_analysis
+    if has_jni_analysis:
+        present.append("Métodos JNI y ciclo de vida en PORTING_PLAN.md")
+    else:
+        missing.append("Métodos JNI / ciclo de vida documentados en plan")
+
+    is_complete = (
+        has_cfg and has_cmake and has_git and has_gitignore and
+        has_plan and has_progress and has_claude and has_skills and
+        has_scaffold and (has_apk or has_extract)
+    )
+
+    return {
+        "is_complete": is_complete,
+        "is_incomplete": not is_complete,
+        "missing": missing,
+        "present": present,
+        "details": details,
+        "metadata": metadata,
+    }
+
+
+def complete_port(project_dir, global_cfg=None, skip_ghidra=False, skip_jadx=False):
+    """!
+    @brief Completes an incomplete or interrupted port, adding any missing
+           scaffolding, git initialization, anti-DMCA .gitignore, plans
+           (PORTING_PLAN.md, port_progress.md, CLAUDE.md, .claude/skills),
+           JNI stubs, and .psvita-toolkit.json.
+    @param project_dir Path to the port directory.
+    @param global_cfg Global config dict (loaded if None).
+    @param skip_ghidra If True, do not attempt to run Ghidra decompiler.
+    @param skip_jadx If True, do not attempt to run jadx decompiler.
+    @return Ready-to-use per-project config dict.
+    """
+    project_dir = Path(project_dir).resolve()
+    if not project_dir.is_dir():
+        raise RuntimeError(f"El directorio no existe: {project_dir}")
+
+    if global_cfg is None:
+        global_cfg = cfgmod.load_global_config()
+
+    print(f"\n{C.BOLD}{t('init_port.completing_port', path=project_dir)}{C.RESET}")
+    audit = check_port_completeness(project_dir)
+    if audit["missing"]:
+        print(f"[*] Elementos faltantes detectados ({len(audit['missing'])}):")
+        for m in audit["missing"]:
+            print(f"    - {m}")
+    else:
+        print(f"{C.GREEN}[+] No faltan componentes estructurales.{C.RESET}")
+
+    meta = audit.get("metadata", {})
+    cmake_path = project_dir / "CMakeLists.txt"
+    cmake_text = cmake_path.read_text(errors="ignore") if cmake_path.exists() else ""
+
+    game_name = meta.get("game_name")
+    if not game_name:
+        m_app = re.search(r'VITA_APP_NAME\s+"([^"]+)"', cmake_text)
+        if m_app and m_app.group(1) != "so-loader":
+            game_name = m_app.group(1)
+        else:
+            folder_clean = project_dir.name.replace("-vita", "").replace("-Vita", "").replace("_vita", "")
+            game_name = folder_clean.replace("-", " ").replace("_", " ").title()
+
+    slug = meta.get("slug")
+    if not slug:
+        m_data = re.search(r'ux0:data/([^/]+)/', cmake_text)
+        if m_data and m_data.group(1) != "gamename":
+            slug = m_data.group(1)
+        else:
+            slug = _default_slug(game_name)
+
+    project_name = meta.get("project_name")
+    if not project_name:
+        m_proj = re.search(r'project\(([A-Za-z0-9_]+)', cmake_text)
+        if m_proj and m_proj.group(1) != "so_loader":
+            project_name = m_proj.group(1)
+        else:
+            project_name = slug.replace("-", "_")
+
+    titleid = meta.get("titleid") or _own_titleid(project_dir)
+    if not titleid:
+        m_tid = re.search(r'VITA_TITLEID\s+"([A-Za-z0-9]{9})"', cmake_text)
+        if m_tid and m_tid.group(1) != "SOLOADER0":
+            titleid = m_tid.group(1)
+        else:
+            base_dir = Path(global_cfg.get("base_dir", project_dir.parent))
+            used = _used_titleids(base_dir)
+            titleid = f"PSV{abs(hash(slug)) % 1000000:06d}"
+            while titleid in used:
+                titleid = f"PSV{abs(hash(titleid + 'x')) % 1000000:06d}"
+
+    vita_ip = meta.get("vita_ip")
+    if not vita_ip:
+        m_ip = re.search(r'set\(PSVITAIP\s+"([^"]+)"', cmake_text)
+        if m_ip:
+            vita_ip = m_ip.group(1)
+        else:
+            vita_ip = "192.168.1.100"
+
+    # Find APK
+    apks = [f for f in project_dir.glob("*.apk") if not f.name.startswith("._")]
+    if not apks:
+        apks = [f for f in project_dir.parent.glob("*.apk") if not f.name.startswith("._") and slug in f.name.lower()]
+    apk_path = str(apks[0]) if apks else ""
+    apk_basename = apks[0].name if apks else "(extracted)"
+
+    # Find extract dir
+    extract_dirs = [d for d in project_dir.glob("*_extract") if d.is_dir() and not d.name.startswith("._")]
+    if extract_dirs:
+        extract_dir = extract_dirs[0]
+    else:
+        extract_dir = project_dir / f"{slug}_extract"
+
+    if (not extract_dir.exists() or not any(extract_dir.iterdir())) and apk_path:
+        print(t("init_port.extracting_apk", dirname=extract_dir.name))
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["unzip", "-qq", "-o", apk_path, "-d", str(extract_dir)])
+
+    # Detect ABIs & SOs
+    abis = []
+    lib_dir = extract_dir / "lib"
+    if not lib_dir.is_dir():
+        lib_dir = project_dir / "lib"
+    if lib_dir.is_dir():
+        abis = sorted(d.name for d in lib_dir.iterdir() if d.is_dir() and not d.name.startswith("._"))
+
+    preferred_abi = "armeabi-v7a" if "armeabi-v7a" in abis else (abis[0] if abis else None)
+
+    arch_note = _arch_note(abis, preferred_abi)
+
+    so_files = []
+    if preferred_abi and (lib_dir / preferred_abi).is_dir():
+        so_files = sorted(f for f in (lib_dir / preferred_abi).glob("*.so") if not f.name.startswith("._"))
+    if not so_files and extract_dir.is_dir():
+        so_files = sorted(f for f in extract_dir.glob("**/*.so") if not f.name.startswith("._"))
+
+    # GLES detection
+    gles_hint = t("init_port.gles_undetermined")
+    if so_files and _have("objdump"):
+        gles1 = gles2 = gles3 = 0
+        for so in so_files:
+            try:
+                r = subprocess.run(["objdump", "-T", str(so)], capture_output=True, text=True)
+                syms = set(re.findall(r"gl[A-Za-z0-9_]*", r.stdout))
+                if syms & {"glVertexPointer", "glClearColorx", "glTexParameterx", "glColor4x"}:
+                    gles1 += 1
+                if syms & {"glCreateShader", "glCreateProgram", "glUseProgram", "glGetUniformLocation"}:
+                    gles2 += 1
+                if syms & {"glDrawArraysInstanced", "glDrawRangeElements", "glGenVertexArrays", "glBindVertexArray"}:
+                    gles3 += 1
+            except Exception:
+                pass
+        if gles3:
+            gles_hint = t("init_port.gles3_detected")
+        elif gles2:
+            gles_hint = t("init_port.gles2_detected")
+        elif gles1:
+            gles_hint = t("init_port.gles1_detected")
+        else:
+            gles_hint = t("init_port.gles_no_signal")
+
+    manifest = extract_dir / "AndroidManifest.xml"
+    java_package = ""
+    if manifest.exists():
+        try:
+            m = re.search(rb'package="([^"]*)"', manifest.read_bytes())
+            if m:
+                java_package = m.group(1).decode(errors="ignore")
+        except Exception:
+            pass
+
+    ctx = {
+        "game_name": game_name, "slug": slug, "folder_name": project_dir.name,
+        "project_name": project_name, "apk_path": apk_path,
+        "apk_basename": apk_basename, "vita_ip": vita_ip,
+        "titleid": titleid, "new_dir": project_dir,
+        "extract_dir": extract_dir, "abis": abis,
+        "preferred_abi": preferred_abi, "arch_note": arch_note,
+        "so_files": so_files, "gles_hint": gles_hint,
+        "java_package": java_package, "gles_final": gles_hint,
+    }
+
+    have_jadx, have_docker_so = check_prereqs(global_cfg)
+
+    # 1. Boilerplate / CMakeLists
+    if not (project_dir / "CMakeLists.txt").exists():
+        setup_repo_dir(global_cfg, ctx)
+    else:
+        cmake_path = project_dir / "CMakeLists.txt"
+        text = cmake_path.read_text(errors="ignore")
+        changed = False
+        if "SOLOADER0" in text and titleid:
+            text = text.replace('set(VITA_TITLEID "SOLOADER0")', f'set(VITA_TITLEID "{titleid}")')
+            changed = True
+        if 'project(so_loader C CXX)' in text and project_name:
+            text = text.replace('project(so_loader C CXX)', f'project({project_name} C CXX)')
+            changed = True
+        if 'set(VITA_APP_NAME "so-loader")' in text and game_name:
+            text = text.replace('set(VITA_APP_NAME "so-loader")', f'set(VITA_APP_NAME "{game_name}")')
+            changed = True
+        if changed:
+            cmake_path.write_text(text)
+
+    # 2. Decompile step
+    decompile(global_cfg, ctx, have_jadx, have_docker_so, skip_ghidra=skip_ghidra, skip_jadx=skip_jadx)
+
+    # 3. Git init & .gitignore
+    if not (project_dir / ".git").is_dir():
+        git_init_and_ignore(ctx)
+    else:
+        gi = project_dir / ".gitignore"
+        if not gi.exists() or gi.stat().st_size < 150:
+            git_init_and_ignore(ctx)
+
+    # 4. PORTING_PLAN.md and port_progress.md
+    if not (project_dir / "PORTING_PLAN.md").exists() or not (project_dir / "port_progress.md").exists():
+        write_plan_and_progress(ctx)
+
+    # 5. Engine and JNI analysis
+    analyze_engine_and_jni(ctx)
+
+    # 6. CLAUDE.md and .claude/skills
+    if not (project_dir / "CLAUDE.md").exists() or not (project_dir / ".claude" / "skills").is_dir():
+        write_claude_md_and_skills(global_cfg, ctx)
+
+    # 7. Project config
+    if not (project_dir / ".psvita-toolkit.json").exists():
+        project_cfg = write_project_config(ctx)
+    else:
+        project_cfg = cfgmod.load_project_config(project_dir)
+        project_cfg["_project_dir"] = str(project_dir)
+
+    print(f"\n{C.GREEN}{t('init_port.port_complete_ok')}{C.RESET}")
+    return project_cfg
+
+
 def run_wizard(global_cfg):
     """!
     @brief Entry point: run the full new-port creation wizard.
@@ -1398,12 +2140,20 @@ def run_wizard(global_cfg):
     try:
         have_jadx, have_docker_so = check_prereqs(global_cfg)
         ctx = prompt_inputs(global_cfg)
+        new_dir = ctx["new_dir"]
+
+        if new_dir.exists() and any(new_dir.iterdir()):
+            audit = check_port_completeness(new_dir)
+            if audit["is_incomplete"]:
+                print(f"\n{C.YELLOW}[*] La carpeta {new_dir} ya existe y está incompleta ({len(audit['missing'])} faltantes).{C.RESET}")
+                if tui.confirm("¿Deseas completarla/repararla agregando lo que falta?", default=True):
+                    return complete_port(new_dir, global_cfg=global_cfg, skip_ghidra=ctx.get("skip_ghidra", False))
 
         tui.clear()
         tui.print_banner(t("init_port.creating_port_title", game_name=ctx['game_name']))
         setup_repo_dir(global_cfg, ctx)
         place_apk_and_detect(ctx)
-        decompile(global_cfg, ctx, have_jadx, have_docker_so)
+        decompile(global_cfg, ctx, have_jadx, have_docker_so, skip_ghidra=ctx.get("skip_ghidra", False))
         git_init_and_ignore(ctx)
         write_plan_and_progress(ctx)
         analyze_engine_and_jni(ctx)
@@ -1422,27 +2172,43 @@ def run_wizard(global_cfg):
         return None
 
 
-def run_wizard_headless(global_cfg, apk_path, game_name, titleid=None, slug=None,
-                         folder_name=None, vita_ip="192.168.1.100"):
+def run_wizard_headless(global_cfg, apk_path=None, game_name=None, titleid=None, slug=None,
+                         folder_name=None, vita_ip="192.168.1.100", project_path=None,
+                         skip_ghidra=False, skip_jadx=False):
     """!
     @brief Non-interactive equivalent of `run_wizard()`, for the `psvita-toolkit
            init` CLI subcommand: builds the same `ctx` dict `prompt_inputs()`
            would have, from arguments instead of prompts, then runs the exact
            same pipeline (`setup_repo_dir` -> ... -> `write_project_config`).
+           Supports resuming/completing an existing or incomplete port.
     @param global_cfg Global config dict.
-    @param apk_path Path to the source `.apk` (required, must exist).
-    @param game_name Display name of the game (required).
-    @param titleid 9-character TITLEID; auto-assigned only if this project
-           directory already has its own (see `_own_titleid()`) -- otherwise
-           required, since there's no interactive collision-resolution retry.
-    @param slug Internal slug; derived from `game_name` if omitted.
-    @param folder_name Destination folder name (under `base_dir`); derived
-           from `game_name` if omitted.
+    @param apk_path Path to the source `.apk`.
+    @param game_name Display name of the game.
+    @param titleid 9-character TITLEID.
+    @param slug Internal slug.
+    @param folder_name Destination folder name (under `base_dir`).
     @param vita_ip Test PS Vita's IP address.
+    @param project_path Path to an existing project directory to complete/repair.
+    @param skip_ghidra If True, skip Ghidra decompilation.
+    @param skip_jadx If True, skip jadx decompilation.
     @return Ready-to-use per-project config dict.
-    @raise RuntimeError on any invalid/missing/colliding input -- the CLI
-           layer is expected to catch this and exit non-zero with the message.
     """
+    if project_path:
+        return complete_port(project_path, global_cfg=global_cfg, skip_ghidra=skip_ghidra, skip_jadx=skip_jadx)
+
+    base_dir = Path(global_cfg.get("base_dir", "."))
+    if folder_name:
+        target_dir = base_dir / folder_name
+        if target_dir.is_dir() and any(target_dir.iterdir()):
+            return complete_port(target_dir, global_cfg=global_cfg, skip_ghidra=skip_ghidra, skip_jadx=skip_jadx)
+    elif game_name:
+        default_folder = game_name.replace(" ", "-") + "-vita"
+        target_dir = base_dir / default_folder
+        if target_dir.is_dir() and any(target_dir.iterdir()):
+            return complete_port(target_dir, global_cfg=global_cfg, skip_ghidra=skip_ghidra, skip_jadx=skip_jadx)
+
+    if not apk_path:
+        raise RuntimeError("apk_path is required to create a new port from scratch.")
     apk_path = str(Path(apk_path).expanduser())
     if not Path(apk_path).exists():
         raise RuntimeError(t("tui.path_not_found", path=apk_path))
@@ -1453,7 +2219,6 @@ def run_wizard_headless(global_cfg, apk_path, game_name, titleid=None, slug=None
     folder_name = folder_name or (game_name.replace(" ", "-") + "-vita")
     project_name = slug.replace("-", "_")
 
-    base_dir = Path(global_cfg["base_dir"])
     new_dir = base_dir / folder_name
     own_id = _own_titleid(new_dir)
 
@@ -1477,7 +2242,7 @@ def run_wizard_headless(global_cfg, apk_path, game_name, titleid=None, slug=None
     print(f"\n{C.BOLD}{t('init_port.creating_port_title', game_name=ctx['game_name'])}{C.RESET}")
     setup_repo_dir(global_cfg, ctx)
     place_apk_and_detect(ctx)
-    decompile(global_cfg, ctx, have_jadx, have_docker_so)
+    decompile(global_cfg, ctx, have_jadx, have_docker_so, skip_ghidra=skip_ghidra, skip_jadx=skip_jadx)
     git_init_and_ignore(ctx)
     write_plan_and_progress(ctx)
     analyze_engine_and_jni(ctx)
