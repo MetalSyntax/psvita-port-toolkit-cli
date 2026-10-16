@@ -117,7 +117,13 @@ def load_global_config():
         return {}
     try:
         with open(GLOBAL_CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            cfg = json.load(f)
+            if "ios_boilerplate_dir" not in cfg:
+                base = Path(cfg.get("base_dir", "."))
+                candidate = base / "ios-loader-boilerplate"
+                if candidate.is_dir():
+                    cfg["ios_boilerplate_dir"] = str(candidate)
+            return cfg
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -141,6 +147,7 @@ REQUIRED_GLOBAL_KEYS = {
 }
 
 OPTIONAL_GLOBAL_KEYS = {
+    "ios_boilerplate_dir": "/Volumes/TOSHIBA EXT/PSVITA Develop/ios-loader-boilerplate",
     "vita_parse_core_dir": str(Path.home() / "vita-tools/vita-parse-core"),
     "vpn_disconnect_cmd": "",
     "recent_projects": [],
@@ -321,7 +328,8 @@ def save_project_config(project_dir, cfg):
 def new_project_config(
     game_name, slug, project_name, titleid,
     vita_ip="192.168.1.100", vita_port=DEFAULT_VITA_PORT,
-    apk_basename="", build_dir="build",
+    apk_basename="", build_dir="build", platform="android",
+    ipa_basename="",
 ):
     """!
     @brief Build a fresh per-project config dict with the standard Vita path layout.
@@ -333,25 +341,32 @@ def new_project_config(
     @param vita_port FTP port of the test PS Vita (VitaShell default: 1337).
     @param apk_basename Original `.apk` filename, if known.
     @param build_dir Local build output directory, relative to the project root.
+    @param platform Target source platform ('android' or 'ios').
+    @param ipa_basename Original `.ipa` filename, if known.
     @return New per-project config dict, ready to pass to `save_project_config()`.
     """
-    return {
+    cfg = {
         "game_name": game_name,
         "slug": slug,
         "project_name": project_name,
         "titleid": titleid,
+        "platform": platform,
         "vita_ip": vita_ip,
         "vita_port": vita_port,
-        "apk_basename": apk_basename,
         "build_dir": build_dir,
         "vita_downloads_dir": "/ux0:/downloads",
         "vita_data_dir": "/ux0:/data",
-        "vita_logs_dir": f"/ux0:/data/{slug}/logs",
+        "vita_logs_dir": f"/ux0:/data/{slug}/logs" if platform == "android" else f"/ux0:/data/{slug}",
         "vita_cg_dir": f"ux0:/data/{slug}/cg",
         "vita_glsl_dir": f"ux0:/data/{slug}/glsl",
         "vita_game_data_dir": f"/ux0:/data/{slug}",
         "vita_screenshots_dir": "/ux0:/picture/SCREENSHOT",
     }
+    if platform == "android":
+        cfg["apk_basename"] = apk_basename
+    else:
+        cfg["ipa_basename"] = ipa_basename or apk_basename
+    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -472,5 +487,17 @@ def autodetect_legacy_fields(project_dir):
 
     if not guess["project_name"]:
         guess["project_name"] = guess["slug"] or "port"
+
+    # Detect platform
+    is_ios = (
+        (project_dir / "game_app").exists()
+        or (project_dir / "Payload").is_dir()
+        or bool(list(project_dir.glob("*.ipa")))
+        or bool(list(project_dir.glob("*.app")))
+        or (project_dir / "tools" / "macho_prep.py").exists()
+        or (project_dir / "source" / "macho.c").exists()
+        or (project_dir / "source" / "darwin.c").exists()
+    )
+    guess["platform"] = "ios" if is_ios else "android"
 
     return guess

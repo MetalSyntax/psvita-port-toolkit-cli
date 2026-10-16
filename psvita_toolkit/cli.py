@@ -120,8 +120,10 @@ def build_parser():
     p_analyze.add_argument("--so-base", help="Runtime base address of the .so, hex (e.g. 0x98000000).")
 
 
-    p_init = sub.add_parser("init", help="Create a new port from an Android .apk (non-interactive) or resume an existing one.")
-    p_init.add_argument("--apk", help="Path to the source .apk (required unless resuming with --project).")
+    p_init = sub.add_parser("init", help="Create a new port from an Android .apk or iOS .ipa (non-interactive) or resume an existing one.")
+    p_init.add_argument("app_file", nargs="?", help="Optional direct path to .apk, .ipa or existing port directory.")
+    p_init.add_argument("--apk", help="Path to the source Android .apk.")
+    p_init.add_argument("--ipa", help="Path to the source iOS .ipa (Mach-O loader port).")
     p_init.add_argument("--name", help="Display game name.")
     p_init.add_argument("--titleid", help="9-character TITLEID (required unless resuming this project's own).")
     p_init.add_argument("--slug", help="Internal slug (default: derived from --name).")
@@ -422,6 +424,20 @@ def _cmd_init(args):
     i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
 
     project_path = getattr(args, "project", None)
+    app_file = getattr(args, "app_file", None)
+    if app_file:
+        p_app = Path(app_file).expanduser()
+        if p_app.is_dir() and (p_app / ".psvita-toolkit.json").exists():
+            project_path = str(p_app)
+        elif p_app.suffix.lower() == ".ipa" or p_app.name.endswith(".app"):
+            if not getattr(args, "ipa", None):
+                args.ipa = str(p_app)
+        elif p_app.suffix.lower() == ".apk":
+            if not getattr(args, "apk", None):
+                args.apk = str(p_app)
+        elif p_app.is_dir() and not project_path:
+            project_path = str(p_app)
+
     if not project_path and getattr(args, "folder", None) and global_cfg.get("base_dir"):
         candidate = Path(global_cfg["base_dir"]) / args.folder
         if candidate.is_dir() and getattr(args, "resume", False):
@@ -440,14 +456,21 @@ def _cmd_init(args):
         except RuntimeError as e:
             return _fail(str(e))
 
-    if not args.apk:
-        return _fail("Path to .apk is required when creating a new port (--apk <path>)")
-    if not args.name:
-        return _fail("Game name is required (--name <name>)")
+    if not getattr(args, "apk", None) and not getattr(args, "ipa", None):
+        return _fail("Path to .apk (--apk <path>) or .ipa (--ipa <path> / argument) is required when creating a new port")
+
+    # Auto-derivar nombre si no se especificó explícitamente
+    if not getattr(args, "name", None):
+        target_path = Path(args.ipa or args.apk)
+        raw_name = target_path.stem
+        # Limpiar sufijos típicos de versiones (_v.1.0.4, -v1.0.5, etc.)
+        cleaned = re.sub(r"[-_]v?\d+[\d._]*.*$", "", raw_name, flags=re.IGNORECASE)
+        cleaned = cleaned.replace("_", " ").replace("-", " ").strip()
+        args.name = cleaned.title() or target_path.stem
 
     try:
         project_cfg = init_port.run_wizard_headless(
-            global_cfg, apk_path=args.apk, game_name=args.name, titleid=args.titleid,
+            global_cfg, apk_path=args.apk, ipa_path=args.ipa, game_name=args.name, titleid=args.titleid,
             slug=args.slug, folder_name=args.folder, vita_ip=args.vita_ip,
             skip_ghidra=args.skip_ghidra, skip_jadx=args.skip_jadx,
         )
@@ -593,6 +616,9 @@ def _cmd_jni_analyze(args):
     project_cfg, err = _load_project(args.project)
     if err:
         return _fail(err)
+    if project_cfg.get("platform") == "ios":
+        print(f"{C.YELLOW}[*] Este proyecto es un port de iOS (Mach-O); no utiliza JNI de Java.{C.RESET}")
+        return 0
     jni_analyzer.middleware_report(project_cfg)
     jni_analyzer.generate_jni_stubs(project_cfg, out_dir=args.out_dir)
     jni_analyzer.document_lifecycle_in_plan(project_cfg)

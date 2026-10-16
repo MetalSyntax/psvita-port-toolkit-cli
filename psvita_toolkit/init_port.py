@@ -23,9 +23,12 @@ script this way, and the real bugs fixed in `_same_file()`,
 
 import json
 import os
+import plistlib
 import re
 import shutil
+import struct
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -1188,7 +1191,11 @@ def prompt_inputs(global_cfg):
 
     project_name = slug.replace("-", "_")
 
-    apk_path = tui.input_path(t("init_port.apk_path_prompt"), must_exist=True)
+    app_source_path = tui.input_path("Ruta absoluta al .apk (Android) o .ipa (iOS) original:", must_exist=True)
+    is_ipa = Path(app_source_path).suffix.lower() == ".ipa" or (Path(app_source_path).is_dir() and Path(app_source_path).name.endswith(".app"))
+    platform = "ios" if is_ipa else "android"
+    apk_path = "" if is_ipa else app_source_path
+    ipa_path = app_source_path if is_ipa else ""
 
     vita_ip = input(f"{C.BOLD}{t('init_port.vita_ip_prompt')}{C.RESET} [192.168.1.100]: ").strip() or "192.168.1.100"
 
@@ -1223,10 +1230,14 @@ def prompt_inputs(global_cfg):
 
     print(f"\n{C.BOLD}{t('init_port.summary_title')}{C.RESET}")
     print(t("init_port.summary_game", name=game_name))
+    print(f"  Plataforma: {'iOS (Mach-O loader)' if platform == 'ios' else 'Android (soloader + FalsoJNI)'}")
     print(t("init_port.summary_slug", slug=slug))
     print(t("init_port.summary_folder", folder=new_dir))
     print(t("init_port.summary_project", project=project_name))
-    print(t("init_port.summary_apk", apk=apk_path))
+    if platform == "ios":
+        print(f"  IPA / App: {ipa_path}")
+    else:
+        print(t("init_port.summary_apk", apk=apk_path))
     print(t("init_port.summary_titleid", titleid=titleid))
     print(t("init_port.summary_vita_ip", ip=vita_ip))
 
@@ -1236,8 +1247,9 @@ def prompt_inputs(global_cfg):
     skip_ghidra = not tui.confirm(f"\n{t('init_port.prompt_skip_ghidra')}", default=True)
 
     return {
+        "platform": platform,
         "game_name": game_name, "slug": slug, "folder_name": folder_name,
-        "project_name": project_name, "apk_path": apk_path,
+        "project_name": project_name, "apk_path": apk_path, "ipa_path": ipa_path,
         "vita_ip": vita_ip, "titleid": titleid, "new_dir": new_dir,
         "skip_ghidra": skip_ghidra,
     }
@@ -1280,6 +1292,71 @@ def setup_repo_dir(global_cfg, ctx):
         text = text.replace('ux0:data/gamename/', f'ux0:data/{ctx["slug"]}/')
         cmake_path.write_text(text)
         print(f"{C.GREEN}{t('init_port.cmake_adapted')}{C.RESET}")
+
+
+def setup_repo_dir_ios(global_cfg, ctx):
+    """!
+    @brief Clones or copies ios-loader-boilerplate into ctx['new_dir'] and adapts
+           CMakeLists.txt, source/hle.h, and permissions for the new iOS port project.
+    @param global_cfg Global toolkit configuration dict.
+    @param ctx Port wizard context dict.
+    """
+    new_dir = ctx["new_dir"]
+    ios_boilerplate = global_cfg.get("ios_boilerplate_dir")
+    if not ios_boilerplate or not Path(ios_boilerplate).is_dir():
+        base_dir = Path(global_cfg.get("base_dir", "."))
+        candidate = base_dir / "ios-loader-boilerplate"
+        if candidate.is_dir():
+            ios_boilerplate = str(candidate)
+        else:
+            ios_boilerplate = "/Volumes/TOSHIBA EXT/PSVITA Develop/ios-loader-boilerplate"
+
+    ios_bp_path = Path(ios_boilerplate)
+    if not ios_bp_path.is_dir():
+        raise RuntimeError(f"No se encontró el boilerplate de iOS en {ios_bp_path}. Asegúrate de que existe o configúralo en ~/.psvita-toolkit/config.json")
+
+    if (new_dir / ".git").is_dir():
+        print(f"{C.YELLOW}{t('init_port.already_git_repo', new_dir=new_dir)}{C.RESET}")
+        return
+
+    if new_dir.exists() and any(new_dir.iterdir()):
+        print(f"[*] El directorio {new_dir} ya existe, fusionando estructura del boilerplate iOS...")
+    else:
+        print(f"[*] Clonando boilerplate de iOS desde {ios_bp_path}...")
+
+    with tempfile.TemporaryDirectory() as tmp_clone:
+        _sh(["git", "clone", "--quiet", str(ios_bp_path), tmp_clone])
+        shutil.rmtree(Path(tmp_clone) / ".git", ignore_errors=True)
+        new_dir.mkdir(parents=True, exist_ok=True)
+        _merge_tree_no_clobber(tmp_clone, new_dir)
+
+    cmake_path = new_dir / "CMakeLists.txt"
+    if cmake_path.exists():
+        text = cmake_path.read_text(errors="ignore")
+        text = text.replace("project(ios_loader C ASM)", f"project({ctx['project_name']} C ASM)")
+        text = text.replace('set(VITA_APP_NAME "iOS Loader")', f'set(VITA_APP_NAME "{ctx["game_name"]}")')
+        text = text.replace('set(VITA_TITLEID "IOSLOAD00")', f'set(VITA_TITLEID "{ctx["titleid"]}")')
+        text = text.replace('set(VITA_VPKNAME "ios_loader")', f'set(VITA_VPKNAME "{ctx["project_name"]}")')
+        text = re.sub(r'set\(PSVITAIP "[^"]*"', f'set(PSVITAIP "{ctx["vita_ip"]}"', text)
+        text = text.replace("ux0:data/ios_game/", f"ux0:data/{ctx['slug']}/")
+        cmake_path.write_text(text)
+        print(f"{C.GREEN}[+] CMakeLists.txt (iOS) adaptado.{C.RESET}")
+
+    hle_path = new_dir / "source" / "hle.h"
+    if hle_path.exists():
+        text = hle_path.read_text(errors="ignore")
+        text = text.replace("ux0:data/ios_game/", f"ux0:data/{ctx['slug']}/")
+        hle_path.write_text(text)
+
+    # Asegurar permisos de ejecución en scripts de tools/
+    tools_dir = new_dir / "tools"
+    if tools_dir.is_dir():
+        for script in tools_dir.glob("*"):
+            if script.is_file():
+                try:
+                    script.chmod(0o755)
+                except Exception:
+                    pass
 
 
 def place_apk_and_detect(ctx):
@@ -1448,7 +1525,62 @@ def git_init_and_ignore(ctx):
     if not (new_dir / ".git").is_dir():
         _sh(["git", "init", "-q"], cwd=new_dir)
 
-    gitignore = f"""# macOS metadata
+    if ctx.get("platform") == "ios":
+        gitignore = f"""# macOS metadata
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# iOS IPA / App original y extracción -- nunca commitear el juego (anti-DMCA)
+*.ipa
+*.zip
+*.app/
+Payload/
+game_app
+game_app/
+/{slug}_extract/
+rebase.bin
+
+# Assets del juego montados para pruebas
+ux0_data/
+assets/
+
+# Build artifacts
+/build/
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+*.elf
+*.velf
+*.self
+eboot.bin
+*.vpk
+compile_commands.json
+
+# Debugging en consola real
+/logs/
+*.log
+*.psp2dmp
+psp2core-*
+
+# Python
+__pycache__/
+*.pyc
+
+# Config local del toolkit (contiene IP de tu Vita)
+.psvita-toolkit.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+cmake-build-*/
+"""
+    else:
+        apk_base = ctx.get('apk_basename', '*.apk')
+        gitignore = f"""# macOS metadata
 .DS_Store
 ._*
 .Spotlight-V100
@@ -1459,7 +1591,7 @@ def git_init_and_ignore(ctx):
 *.zip
 /{slug}_extract/
 
-# Java decompilado con jadx (derivado, regenerable: jadx -d decompiled/apk_jadx "{ctx['apk_basename']}")
+# Java decompilado con jadx (derivado, regenerable: jadx -d decompiled/apk_jadx "{apk_base}")
 /decompiled/apk_jadx/
 
 # Pseudo-C decompilado del/los .so (derivado, regenerable con devrvk/so-decompiler)
@@ -1655,7 +1787,7 @@ def write_claude_md_and_skills(global_cfg, ctx):
     skills_dest = new_dir / ".claude" / "skills"
     skills_dest.mkdir(parents=True, exist_ok=True)
 
-    for skill in ("psvita-porting", "so-crash-triage", "psvita-port-init"):
+    for skill in ("psvita-porting", "so-crash-triage", "psvita-port-init", "psvita-toolkit", "psvita-token-economy", "psvita-doxygen-docs"):
         src = None
         for candidate_base in skills_sources:
             cand = candidate_base / skill
@@ -1669,9 +1801,36 @@ def write_claude_md_and_skills(global_cfg, ctx):
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("._*"))
             print(f"{C.GREEN}{t('init_port.skill_copied', skill=skill)}{C.RESET}")
         else:
-            print(f"{C.YELLOW}{t('init_port.skill_not_found', skill=skill, source=global_cfg.get('skills_source', ''))}{C.RESET}")
+            # Non-fatal if skill is only in one source
+            pass
 
-    claude_md = f"""# {t('init_port.claude_md_title', game_name=ctx['game_name'])}
+    claude_file = new_dir / "CLAUDE.md"
+    if claude_file.exists() and claude_file.stat().st_size > 50:
+        return
+
+    if ctx.get("platform") == "ios":
+        claude_md = f"""# {ctx['game_name']} (iOS Mach-O) → PS Vita
+
+Port de {ctx['game_name']} (iOS Mach-O) a PS Vita con loader de Mach-O propio.
+Leer `PORTING_PLAN.md` antes de modificar el loader.
+
+## Estructura
+
+- `source/macho.c`: Carga, parseo Mach-O, mapeo de segmentos, rebase y resolución de imports.
+- `source/darwin.c`: Capa de compatibilidad libc/libgcc/pthread/semáforos de Darwin.
+- `game_app` → symlink a la carpeta `.app` original del IPA.
+- `ux0_data/{ctx['slug']}/`: Datos extraídos y assets del juego en la consola.
+- `PORTING_PLAN.md`: Plan de port y estado actual de fases.
+- `port_progress.md`: Registro de progreso.
+
+## Reglas
+
+- ABI iOS ARM: softfp en ARMv6/v7 (floats en registros enteros), r9 temporal (preservar en callbacks).
+- Nada del IPA original en el repositorio git (.gitignore anti-DMCA).
+- Un bug por corrida de consola física, guiado por logs.
+"""
+    else:
+        claude_md = f"""# {t('init_port.claude_md_title', game_name=ctx['game_name'])}
 
 {t('init_port.claude_md_intro', apk=ctx.get('apk_basename', ''))}
 
@@ -1700,7 +1859,7 @@ def write_claude_md_and_skills(global_cfg, ctx):
 4. {t('init_port.claude_md_wf4')}
 5. {t('init_port.claude_md_wf5')}
 """
-    (new_dir / "CLAUDE.md").write_text(claude_md)
+    claude_file.write_text(claude_md)
     print(f"{C.GREEN}{t('init_port.claude_md_written')}{C.RESET}")
 
 
@@ -1711,11 +1870,9 @@ def analyze_engine_and_jni(ctx):
            decompiled Java, and document detected lifecycle methods in the
            freshly-written `PORTING_PLAN.md`.
     @param ctx Wizard context dict (needs `new_dir`).
-    @note Best-effort and non-fatal: an engine with no `native` methods
-          found yet (e.g. jadx wasn't available) simply skips this silently
-          -- it's meant to save time when the sources are already there, not
-          to block port creation when they aren't.
     """
+    if ctx.get("platform") == "ios":
+        return
     from . import jni_analyzer
     new_dir = ctx["new_dir"]
     print(f"\n{C.BOLD}{t('init_port.analyzing_engine_title')}{C.RESET}")
@@ -1725,10 +1882,14 @@ def analyze_engine_and_jni(ctx):
 
 
 def write_project_config(ctx):
+    platform = ctx.get("platform", "android")
     project_cfg = cfgmod.new_project_config(
         game_name=ctx["game_name"], slug=ctx["slug"],
         project_name=ctx["project_name"], titleid=ctx["titleid"],
-        vita_ip=ctx["vita_ip"], apk_basename=ctx["apk_basename"],
+        vita_ip=ctx["vita_ip"],
+        apk_basename=ctx.get("apk_basename", ""),
+        platform=platform,
+        ipa_basename=ctx.get("ipa_basename", ""),
     )
     cfgmod.save_project_config(ctx["new_dir"], project_cfg)
     print(f"{C.GREEN}{t('init_port.project_config_written', new_dir=ctx['new_dir'])}{C.RESET}")
@@ -1736,10 +1897,549 @@ def write_project_config(ctx):
     return project_cfg
 
 
+def detect_project_platform(project_dir, cfg=None):
+    """!
+    @brief Detects whether a port project is 'ios' (Mach-O loader / IPA) or 'android' (ELF soloader / APK).
+    @param project_dir Path to the project root directory.
+    @param cfg Optional parsed config dict.
+    @return 'ios' or 'android'.
+    """
+    project_dir = Path(project_dir).resolve()
+    if cfg and cfg.get("platform") in ("ios", "android"):
+        return cfg["platform"]
+
+    cfg_file = project_dir / ".psvita-toolkit.json"
+    if cfg_file.is_file():
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                disk_cfg = json.load(f)
+                if disk_cfg.get("platform") in ("ios", "android"):
+                    return disk_cfg["platform"]
+                if disk_cfg.get("ipa_basename"):
+                    return "ios"
+        except Exception:
+            pass
+
+    if (project_dir / "game_app").exists():
+        return "ios"
+    if any(f for f in project_dir.glob("*.ipa") if not f.name.startswith("._")):
+        return "ios"
+    if any(d for d in project_dir.glob("*.app") if not d.name.startswith("._")):
+        return "ios"
+    if (project_dir / "Payload").is_dir():
+        return "ios"
+
+    if (project_dir / "source" / "macho.c").exists() or (project_dir / "source" / "macho.h").exists():
+        return "ios"
+    if (project_dir / "tools" / "macho_prep.py").exists() or (project_dir / "tools" / "annotate.py").exists():
+        return "ios"
+    if (project_dir / "source" / "darwin.c").exists():
+        return "ios"
+
+    for doc in ("PORTING_PLAN.md", "CLAUDE.md"):
+        p = project_dir / doc
+        if p.is_file():
+            try:
+                txt = p.read_text(errors="ignore")
+                if "Mach-O" in txt or "mach-o" in txt or "iOS" in txt or "IPA" in txt or "game_app" in txt:
+                    return "ios"
+            except Exception:
+                pass
+
+    return "android"
+
+
+def inspect_macho_binary(bin_path):
+    """!
+    @brief Reads Mach-O header to detect architecture (armv6, armv7, arm64),
+           encryption info, and basic properties.
+    @param bin_path Path to the executable binary.
+    @return dict with binary metadata.
+    """
+    bin_path = Path(bin_path)
+    if not bin_path.is_file():
+        return {"error": "Binary not found"}
+
+    archs = []
+    encrypted = False
+    cryptid = 0
+    file_desc = ""
+
+    if _have("file"):
+        try:
+            r = subprocess.run(["file", "-b", str(bin_path)], capture_output=True, text=True)
+            file_desc = r.stdout.strip()
+        except Exception:
+            pass
+
+    if _have("otool"):
+        try:
+            r = subprocess.run(["otool", "-hv", str(bin_path)], capture_output=True, text=True)
+            for line in r.stdout.splitlines():
+                if "ARM" in line.upper():
+                    parts = line.split()
+                    if len(parts) > 1:
+                        archs.append(parts[1].lower())
+        except Exception:
+            pass
+
+        try:
+            r_enc = subprocess.run(["otool", "-l", str(bin_path)], capture_output=True, text=True)
+            m_crypt = re.search(r"cryptid\s+(\d+)", r_enc.stdout)
+            if m_crypt:
+                cryptid = int(m_crypt.group(1))
+                encrypted = (cryptid != 0)
+        except Exception:
+            pass
+
+    if not archs and file_desc:
+        if "armv6" in file_desc.lower():
+            archs.append("armv6")
+        if "armv7" in file_desc.lower():
+            archs.append("armv7")
+        if "arm64" in file_desc.lower():
+            archs.append("arm64")
+
+    size_kb = bin_path.stat().st_size / 1024
+    return {
+        "archs": archs or ["armv6"],
+        "encrypted": encrypted,
+        "cryptid": cryptid,
+        "file_desc": file_desc,
+        "size_kb": size_kb,
+    }
+
+
+def place_ipa_and_detect(ctx):
+    """!
+    @brief Copies the source .ipa into the project, extracts it to {slug}_extract/,
+           creates the game_app symlink to Payload/*.app, and extracts bundle metadata.
+    @param ctx Wizard context dict.
+    """
+    new_dir = ctx["new_dir"]
+    ipa_path = Path(ctx["ipa_path"]).expanduser().resolve()
+    ipa_basename = ipa_path.name
+
+    print(f"[*] Copiando .ipa original...")
+    dest_ipa = new_dir / ipa_basename
+    if not _same_file(ipa_path, dest_ipa):
+        shutil.copy2(ipa_path, dest_ipa)
+
+    extract_dir = new_dir / f"{ctx['slug']}_extract"
+    payload_dir = extract_dir / "Payload"
+    if not payload_dir.is_dir():
+        print(f"[*] Extrayendo IPA a {extract_dir.name}/ ...")
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["unzip", "-qq", "-o", str(ipa_path), "-d", str(extract_dir)])
+
+    app_dirs = list(extract_dir.glob("Payload/*.app")) or list(extract_dir.glob("**/*.app"))
+    app_dir = app_dirs[0] if app_dirs else None
+
+    bundle_id = ""
+    executable_name = ""
+    app_name = ctx.get("game_name", "")
+    if app_dir and (app_dir / "Info.plist").exists():
+        try:
+            with open(app_dir / "Info.plist", "rb") as fp:
+                plist = plistlib.load(fp)
+            executable_name = plist.get("CFBundleExecutable", "")
+            bundle_id = plist.get("CFBundleIdentifier", "")
+            app_name = plist.get("CFBundleDisplayName") or plist.get("CFBundleName") or ctx.get("game_name", "")
+        except Exception:
+            pass
+
+    game_app_link = new_dir / "game_app"
+    if app_dir and not game_app_link.exists():
+        try:
+            rel_path = os.path.relpath(app_dir, new_dir)
+            game_app_link.symlink_to(rel_path)
+            print(f"[+] Enlace simbólico game_app -> {rel_path} creado.")
+        except Exception:
+            pass
+
+    exec_path = (app_dir / executable_name) if (app_dir and executable_name) else None
+    macho_info = inspect_macho_binary(exec_path) if exec_path and exec_path.is_file() else {}
+
+    abis = macho_info.get("archs", ["armv6"])
+    preferred_abi = abis[0] if abis else "armv6"
+    arch_note = f"Mach-O iOS ({', '.join(abis)})"
+    if macho_info.get("cryptid", 0) == 0:
+        arch_note += " -- descifrado (cryptid 0, listo para portar)"
+    else:
+        arch_note += f" -- [!] CIFRADO FairPlay (cryptid {macho_info.get('cryptid')})"
+
+    # Actualizar source/main.c con el ejecutable detectado
+    if app_dir and executable_name:
+        main_c = new_dir / "source" / "main.c"
+        if main_c.exists():
+            mc_text = main_c.read_text(errors="ignore")
+            if 'BUNDLE_PATH "game_exec"' in mc_text:
+                mc_text = mc_text.replace('BUNDLE_PATH "game_exec"', f'BUNDLE_PATH "{executable_name}"')
+                main_c.write_text(mc_text)
+
+    # Alerta destacada si FairPlay DRM está activo
+    if macho_info.get("cryptid", 0) != 0:
+        print(f"\n{C.RED}{C.BOLD}[!] ALERTA CRITICA: El ejecutable '{executable_name}' tiene CIFRADO FairPlay DRM (cryptid={macho_info.get('cryptid')}).{C.RESET}")
+        print(f"{C.YELLOW}[*] El binario no podrá correr en PS Vita sin descifrarlo primero en un dispositivo iOS (con Clutch, frida-ios-dump o bfdecrypt).{C.RESET}\n")
+
+    # Ejecutar tools/macho_prep.py automáticamente si está disponible
+    macho_prep_script = new_dir / "tools" / "macho_prep.py"
+    rebase_bin = new_dir / "ux0_data" / ctx["slug"] / "rebase.bin"
+    macho_report = new_dir / "docs" / "macho_report.txt"
+    rebase_words = 0
+    imports_list = []
+    if macho_prep_script.exists() and exec_path and exec_path.is_file():
+        rebase_bin.parent.mkdir(parents=True, exist_ok=True)
+        macho_report.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[*] Analizando Mach-O y generando rebase.bin con macho_prep.py...")
+        try:
+            r_prep = subprocess.run([
+                sys.executable, "-I", str(macho_prep_script),
+                str(exec_path), str(rebase_bin),
+                "--report", str(macho_report)
+            ], capture_output=True, text=True)
+            if r_prep.returncode == 0:
+                print(f"{C.GREEN}[+] rebase.bin y reporte generados exitosamente.{C.RESET}")
+                if macho_report.exists():
+                    rep_text = macho_report.read_text(errors="ignore")
+                    m_reb = re.search(r"Rebase:\s+(\d+)\s+palabras", rep_text)
+                    if m_reb:
+                        rebase_words = int(m_reb.group(1))
+                    in_imps = False
+                    for line in rep_text.splitlines():
+                        if "imports únicos:" in line:
+                            in_imps = True
+                            continue
+                        if in_imps:
+                            if line.startswith("  _") or line.startswith("  "):
+                                imports_list.append(line.strip())
+                            elif not line.startswith(" "):
+                                break
+            else:
+                print(f"{C.YELLOW}[!] Advertencia ejecutando macho_prep.py: {r_prep.stderr.strip()}{C.RESET}")
+        except Exception as ex:
+            print(f"{C.YELLOW}[!] No se pudo ejecutar macho_prep.py: {ex}{C.RESET}")
+
+    ctx.update({
+        "platform": "ios",
+        "ipa_basename": ipa_basename,
+        "app_dir": app_dir,
+        "bundle_id": bundle_id,
+        "executable_name": executable_name,
+        "extract_dir": extract_dir,
+        "abis": abis,
+        "preferred_abi": preferred_abi,
+        "arch_note": arch_note,
+        "macho_info": macho_info,
+        "rebase_words": rebase_words,
+        "imports_list": imports_list,
+        "so_files": [],
+        "gles_hint": "OpenGL ES (iOS)",
+        "gles_final": "OpenGL ES (iOS)",
+    })
+
+
+def generate_progress_from_plan(game_name, plan_text):
+    """!
+    @brief Extracts tasks/phases from an existing PORTING_PLAN.md to create port_progress.md.
+    """
+    lines = plan_text.splitlines()
+    in_phases = False
+    phase_items = []
+
+    for line in lines:
+        sline = line.strip()
+        if sline.startswith("## Fases") or sline.startswith("## Phases"):
+            in_phases = True
+            continue
+        if in_phases:
+            if sline.startswith("## ") and not (sline.startswith("### Phase") or sline.startswith("### Fase")):
+                break
+            if sline.startswith("- [ ]") or sline.startswith("- [x]"):
+                phase_items.append(line)
+            elif sline.startswith("###"):
+                phase_items.append("\n" + line)
+
+    if phase_items:
+        body = "\n".join(phase_items)
+    else:
+        body = """## Fases de desarrollo
+
+- [x] **0. Repo y herramientas**: Mach-O analizado, rebase.bin generado, scaffolding listo.
+- [ ] **1. Loader mínimo** — GATE: el log llega al bucle principal / inicialización de motor.
+- [ ] **2. Render** — vitaGL / OpenGL ES inicializado. GATE: logo / primer frame en pantalla.
+- [ ] **3. Input** — touch + botones físicos mapeados a la capa táctil / eventos del juego.
+- [ ] **4. Texto y fuentes** — FreeType atlas / fuentes del sistema.
+- [ ] **5. Audio y video** — AudioUnit / OpenAL sobre SceAudioOut.
+- [ ] **6. Guardado y LiveArea** — Persistencia en ux0:data y assets de LiveArea.
+"""
+
+    return f"""# {game_name} — Progreso del Port (iOS Mach-O)
+
+{body}
+"""
+
+
+def write_plan_and_progress_ios(ctx):
+    """!
+    @brief Generates PORTING_PLAN.md and port_progress.md for an iOS Mach-O loader port,
+           informed by the Inotia2-vita case study and binary inspection.
+    """
+    import datetime
+    new_dir = ctx["new_dir"]
+    today = datetime.date.today().isoformat()
+    macho_info = ctx.get("macho_info", {})
+    archs_str = ", ".join(ctx.get("abis", ["armv6"]))
+    rebase_words = ctx.get("rebase_words", 0)
+    imports_list = ctx.get("imports_list", [])
+    exec_name = ctx.get("executable_name", "game_exec")
+    cryptid = macho_info.get("cryptid", 0)
+
+    # Clasificar imports detectados por categoría
+    imp_gl = [i for i in imports_list if "gl" in i.lower()]
+    imp_audio = [i for i in imports_list if any(k in i.lower() for k in ("audio", "al", "sound", "fmod"))]
+    imp_objc = [i for i in imports_list if "objc" in i.lower() or "cf" in i.lower() or "ns" in i.lower()]
+    imp_posix = [i for i in imports_list if any(k in i.lower() for k in ("pthread", "socket", "malloc", "free", "printf"))]
+
+    plan = f"""# {ctx['game_name']} (iOS) → PS Vita
+
+Port de {ctx['game_name']} (iOS, Mach-O {archs_str}) a PS Vita con loader de Mach-O propio.
+Basado en la arquitectura probada de `ios-loader-boilerplate` (caso de estudio Inotia2-vita).
+
+## Lo confirmado del binario ({today})
+
+- Ejecutable: `{exec_name}`, thin/fat **{archs_str}**.
+- Cifrado FairPlay: **cryptid {cryptid}** ({'descifrado, listo para ejecución' if cryptid == 0 else '[!] CIFRADO: Requiere descifrado con Clutch/frida-ios-dump antes de correr en PS Vita'}).
+- Tamaño: {macho_info.get('size_kb', 0):.0f} KB.
+- Bundle ID: `{ctx.get('bundle_id', '')}`.
+- Paquete original: `{ctx.get('ipa_basename', '')}`.
+- App bundle: `game_app` → `{ctx.get('app_dir', '')}`.
+- Palabras de rebase (`rebase.bin`): **{rebase_words if rebase_words else 'Por generar con tools/macho_prep.py'}**.
+- Imports únicos detectados: **{len(imports_list)}** (GL: {len(imp_gl)}, Audio: {len(imp_audio)}, ObjC/CF: {len(imp_objc)}, POSIX/libc: {len(imp_posix)}).
+
+## Reglas Críticas de ABI de iOS en PS Vita
+
+1. **`r9` temporal**: En ARMv6/v7 iOS, `r9` es usado como temporal por el compilador y no se preserva. Compilar con `-ffixed-r9` y usar `call_guest` al llamar al juego.
+2. **Convención SoftFP**: Floats en registros enteros (`r0..r3`). `vitaGL` vendorizada con `SOFTFP_ABI=1` obligatoria para no corromper la proyección en libgxm.
+3. **Alineación de pila a 4 bytes**: El juego asume pila alineada a 4 bytes. Todo import/hook llamado desde el binario entra por `ml_align_call` (asm.S), que realinea a 8 bytes AAPCS copiando argumentos de stack.
+4. **printf de Darwin**: Enteros y dobles de 64 bits viajan en palabras de 32 bits contiguas sin alinear; soportar `%@` de Objective-C (`darwin_printf.c`).
+
+## Estructura en la Vita (`ux0:data/{ctx['slug']}/`)
+
+```
+ux0:data/{ctx['slug']}/
+  {exec_name}.app/   bundle del IPA limpio (ejecutable + recursos)
+  rebase.bin         punteros absolutos reubicados (MACHO_SLIDE = 0x98000000)
+  saves/             partidas guardadas (Documents/ de iOS)
+  logs/              log_001.log .. log_999.log rotativos
+```
+
+## Arquitectura del Loader
+
+| Archivo | Qué reemplaza / funcionalidad |
+|---|---|
+| `source/macho.c` / `asm.S` | Dyld Mach-O: carga, rebase, imports, thunks con trace, `call_guest`, `ml_align_call` |
+| `source/darwin.c` | libc/libgcc/pthread/semáforos de Darwin con `pthread_detach` seguro contra SceUIDs |
+| `source/darwin_printf.c` | Formateador variádico con soporte de dobles desalineados y `%@` |
+| `source/objc.c` | Mini-runtime ObjC (`objc_msgSend`, `NSString`, `UIFont` atlas FreeType, `NSBundle`, IME) |
+| `source/gles.c` | Backend GLES1/2 sobre vitaGL vendorizada con FBO virtual escalado/rotado |
+| `source/cgbi.c` | Soporte transparente para imágenes PNG CgBI de Apple |
+| `source/coreaudio.c` | AudioUnit RemoteIO + AudioSession sobre `sceAudioOut` |
+| `source/input.c` | Touch frontal + botones físicos mapeados a la capa táctil |
+| `source/patch.c` | Parches y hooks específicos de {ctx['game_name']} |
+
+## Fases
+
+- [x] **0. Repo y herramientas**: IPA extraído, binario analizado, `game_app` symlink, scaffolding creado.
+- [ ] **1. Loader mínimo** — GATE: el log llega al bucle principal / inicialización de motor.
+  - [ ] Carga de segmentos en memoria con `macho_load` (slide `0x98000000`).
+  - [ ] Aplicación de `rebase.bin`.
+  - [ ] Resolución de imports indispensables de libc, math, pthread y runtime.
+  - [ ] Ejecución de inicializadores globales con `macho_run_inits()`.
+- [ ] **2. Render** — GATE: primer frame / pantalla de inicio visible en consola física.
+  - [ ] Inicialización de vitaGL y FBO virtual de presentación.
+  - [ ] Manejo de texturas PNG CgBI con `cgbi.c`.
+  - [ ] Swap de buffers funcional a ~60 FPS sin splashscreen freeze.
+- [ ] **3. Input** — GATE: controles funcionales in-game.
+  - [ ] Multitouch frontal de la Vita mapeado a las coordenadas lógicas del juego.
+  - [ ] Mapeo de botones físicos (D-Pad, Cross, Circle, Square, Triangle, Triggers).
+- [ ] **4. Texto y fuentes** — GATE: diálogos y menús legibles.
+  - [ ] FreeType sobre atlas de fuentes (fuentes `sa0:data/font/pvf/` o `font.ttf` local).
+- [ ] **5. Audio y video** — GATE: música y efectos de sonido activos.
+  - [ ] RemoteIO / AudioSession redirigido al hilo `sceAudioOut`.
+  - [ ] Formato y decodificación de audio de streaming o efectos.
+- [ ] **6. Guardado y LiveArea** — GATE: progreso persistente y LiveArea completa.
+  - [ ] Persistencia de partidas en `ux0:data/{ctx['slug']}/saves/`.
+  - [ ] LiveArea personalizada con `icon0.png`, `pic0.png`, `bg0.png`, `startup.png`.
+
+## Iteración y Triage de Crashes
+
+1. Staging de assets: `tools/stage_data.sh`
+2. Despliegue por FTP: `python3 -I tools/deploy_data.py` (o `psvita-toolkit deploy --data`)
+3. Si ocurre un crash:
+   - Descargar logs: `python3 -I tools/deploy_data.py --logs`
+   - Analizar volcado: `psvita-toolkit analyze logs/<dump>.psp2dmp --elf build/{ctx['project_name']}`
+   - Si el PC está en `0x98xxxxxx`, restar `0x98000000` para ubicar la dirección en el Mach-O original con `tools/annotate.py`.
+"""
+    (new_dir / "PORTING_PLAN.md").write_text(plan)
+    print(f"{C.GREEN}[+] Plan de port iOS (PORTING_PLAN.md) escrito.{C.RESET}")
+
+    progress = generate_progress_from_plan(ctx["game_name"], plan)
+    (new_dir / "port_progress.md").write_text(progress)
+    print(f"{C.GREEN}[+] Progreso de port iOS (port_progress.md) escrito.{C.RESET}")
+
+
+def complete_port_ios(project_dir, global_cfg, meta, skip_ghidra=False):
+    """!
+    @brief Completes an incomplete or unconfigured iOS Mach-O port.
+    @param project_dir Path to the port directory.
+    @param global_cfg Global configuration dict.
+    @param meta Metadata extracted from audit / config.
+    @param skip_ghidra Whether to skip Ghidra decompilation.
+    @return Ready-to-use per-project config dict.
+    """
+    cmake_path = project_dir / "CMakeLists.txt"
+    cmake_text = cmake_path.read_text(errors="ignore") if cmake_path.exists() else ""
+
+    game_name = meta.get("game_name")
+    if not game_name:
+        m_app = re.search(r'VITA_APP_NAME\s+"([^"]+)"', cmake_text)
+        if m_app and m_app.group(1) not in ("so-loader", "so_loader"):
+            game_name = m_app.group(1)
+        else:
+            folder_clean = project_dir.name.replace("-vita", "").replace("-Vita", "").replace("_vita", "")
+            game_name = folder_clean.replace("-", " ").replace("_", " ").title()
+
+    slug = meta.get("slug")
+    if not slug:
+        m_data = re.search(r'ux0:data/([^/]+)/?', cmake_text)
+        if m_data and m_data.group(1) not in ("gamename", ""):
+            slug = m_data.group(1)
+        else:
+            slug = _default_slug(game_name)
+
+    project_name = meta.get("project_name")
+    if not project_name:
+        m_proj = re.search(r'project\(([A-Za-z0-9_]+)', cmake_text)
+        if m_proj and m_proj.group(1) not in ("so_loader", "macho_loader"):
+            project_name = m_proj.group(1)
+        else:
+            project_name = slug.replace("-", "_")
+
+    titleid = meta.get("titleid") or _own_titleid(project_dir)
+    if not titleid:
+        m_tid = re.search(r'VITA_TITLEID\s+"([A-Za-z0-9]{9})"', cmake_text)
+        if m_tid and m_tid.group(1) != "SOLOADER0":
+            titleid = m_tid.group(1)
+        else:
+            base_dir = Path(global_cfg.get("base_dir", project_dir.parent))
+            used = _used_titleids(base_dir)
+            titleid = f"PSV{abs(hash(slug)) % 1000000:06d}"
+            while titleid in used:
+                titleid = f"PSV{abs(hash(titleid + 'x')) % 1000000:06d}"
+
+    vita_ip = meta.get("vita_ip")
+    if not vita_ip:
+        m_ip = re.search(r'set\(PSVITAIP\s+"([^"]+)"', cmake_text)
+        if m_ip:
+            vita_ip = m_ip.group(1)
+        else:
+            vita_ip = "192.168.1.100"
+
+    ipas = [f for f in project_dir.glob("*.ipa") if not f.name.startswith("._")]
+    if not ipas:
+        ipas = [f for f in project_dir.parent.glob("*.ipa") if not f.name.startswith("._") and slug in f.name.lower()]
+    ipa_path = str(ipas[0]) if ipas else ""
+    ipa_basename = ipas[0].name if ipas else meta.get("ipa_basename", "")
+
+    game_app = project_dir / "game_app"
+    if not game_app.exists() and ipa_path:
+        extract_dir = project_dir / f"{slug}_extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["unzip", "-qq", "-o", ipa_path, "-d", str(extract_dir)])
+        app_dirs = list(extract_dir.glob("Payload/*.app")) or list(extract_dir.glob("**/*.app"))
+        if app_dirs:
+            try:
+                rel = os.path.relpath(app_dirs[0], project_dir)
+                game_app.symlink_to(rel)
+                print(f"[+] symlink game_app -> {rel} creado.")
+            except Exception:
+                pass
+
+    ctx = {
+        "platform": "ios",
+        "game_name": game_name,
+        "slug": slug,
+        "folder_name": project_dir.name,
+        "project_name": project_name,
+        "ipa_path": ipa_path,
+        "ipa_basename": ipa_basename,
+        "vita_ip": vita_ip,
+        "titleid": titleid,
+        "new_dir": project_dir,
+    }
+
+    if not cmake_path.exists() or not (project_dir / "source" / "macho.c").exists():
+        setup_repo_dir_ios(global_cfg, ctx)
+
+    if cmake_path.exists():
+        text = cmake_path.read_text(errors="ignore")
+        changed = False
+        if "SOLOADER0" in text and titleid:
+            text = text.replace('set(VITA_TITLEID "SOLOADER0")', f'set(VITA_TITLEID "{titleid}")')
+            changed = True
+        if "IOSLOAD00" in text and titleid:
+            text = text.replace('set(VITA_TITLEID "IOSLOAD00")', f'set(VITA_TITLEID "{titleid}")')
+            changed = True
+        if changed:
+            cmake_path.write_text(text)
+
+    if not (project_dir / ".git").is_dir():
+        git_init_and_ignore(ctx)
+    else:
+        gi = project_dir / ".gitignore"
+        if not gi.exists() or gi.stat().st_size < 100:
+            git_init_and_ignore(ctx)
+
+    plan_path = project_dir / "PORTING_PLAN.md"
+    progress_path = project_dir / "port_progress.md"
+
+    if not plan_path.exists():
+        write_plan_and_progress_ios(ctx)
+    elif not progress_path.exists():
+        plan_text = plan_path.read_text(errors="ignore")
+        progress_text = generate_progress_from_plan(game_name, plan_text)
+        progress_path.write_text(progress_text)
+        print(f"{C.GREEN}[+] Progreso (port_progress.md) generado a partir del plan.{C.RESET}")
+
+    claude_path = project_dir / "CLAUDE.md"
+    skills_dir = project_dir / ".claude" / "skills"
+    if not claude_path.exists() or not skills_dir.is_dir() or not any(skills_dir.iterdir()):
+        write_claude_md_and_skills(global_cfg, ctx)
+
+    cfg_file = project_dir / ".psvita-toolkit.json"
+    if not cfg_file.exists():
+        project_cfg = cfgmod.new_project_config(
+            game_name=game_name, slug=slug, project_name=project_name,
+            titleid=titleid, vita_ip=vita_ip, platform="ios", ipa_basename=ipa_basename,
+        )
+        cfgmod.save_project_config(project_dir, project_cfg)
+    else:
+        project_cfg = cfgmod.load_project_config(project_dir) or {}
+        project_cfg["platform"] = "ios"
+        if ipa_basename and not project_cfg.get("ipa_basename"):
+            project_cfg["ipa_basename"] = ipa_basename
+        cfgmod.save_project_config(project_dir, project_cfg)
+
+    project_cfg["_project_dir"] = str(project_dir)
+    print(f"\n{C.GREEN}[+] Port iOS completado y adaptado correctamente.{C.RESET}")
+    return project_cfg
+
+
 def check_port_completeness(project_dir):
     """!
     @brief Audits whether a port directory has all required assets, scaffolding,
-           plans, configs, git repos, and decompilations.
+           plans, configs, git repos, and decompilations (Android or iOS).
     @param project_dir Path to the port directory.
     @return dict with completeness analysis.
     """
@@ -1774,6 +2474,10 @@ def check_port_completeness(project_dir):
     else:
         missing.append("Configuración (.psvita-toolkit.json)")
 
+    platform = detect_project_platform(project_dir, metadata)
+    metadata["platform"] = platform
+    details[f"Plataforma detectada: {platform.upper()}"] = True
+
     # 2. CMakeLists.txt
     cmake_path = project_dir / "CMakeLists.txt"
     has_cmake = cmake_path.is_file()
@@ -1793,7 +2497,7 @@ def check_port_completeness(project_dir):
         m_proj = re.search(r'project\(([A-Za-z0-9_]+)', text)
         if m_proj:
             metadata.setdefault("project_name", m_proj.group(1))
-        m_data = re.search(r'ux0:data/([^/]+)/', text)
+        m_data = re.search(r'ux0:data/([^/]+)/?', text)
         if m_data:
             metadata.setdefault("slug", m_data.group(1))
         m_ip = re.search(r'set\(PSVITAIP\s+"([^"]+)"', text)
@@ -1812,7 +2516,7 @@ def check_port_completeness(project_dir):
         missing.append("Repositorio Git (.git/)")
 
     gitignore_path = project_dir / ".gitignore"
-    has_gitignore = gitignore_path.is_file() and gitignore_path.stat().st_size > 150
+    has_gitignore = gitignore_path.is_file() and gitignore_path.stat().st_size > 80
     details[".gitignore anti-DMCA"] = has_gitignore
     if has_gitignore:
         present.append(".gitignore con reglas anti-DMCA")
@@ -1845,66 +2549,126 @@ def check_port_completeness(project_dir):
         missing.append("Instrucciones IA (CLAUDE.md)")
 
     skills_dir = project_dir / ".claude" / "skills"
-    has_skills = skills_dir.is_dir() and any((skills_dir / s).is_dir() for s in ("psvita-porting", "so-crash-triage", "psvita-port-init"))
+    has_skills = skills_dir.is_dir() and any(
+        (skills_dir / s).is_dir()
+        for s in ("psvita-porting", "so-crash-triage", "psvita-port-init", "psvita-toolkit", "psvita-token-economy")
+    )
     details[".claude/skills/"] = has_skills
     if has_skills:
         present.append("Habilidades Claude/Antigravity (.claude/skills/)")
     else:
         missing.append("Habilidades (.claude/skills/)")
 
-    # 5. Scaffold (source/ and lib/)
-    has_scaffold = (project_dir / "source").is_dir() and (project_dir / "lib").is_dir()
-    details["Scaffold (source/, lib/)"] = has_scaffold
-    if has_scaffold:
-        present.append("Scaffold soloader (source/, lib/)")
+    # 5. Scaffold
+    if platform == "android":
+        has_scaffold = (project_dir / "source").is_dir() and (project_dir / "lib").is_dir()
+        details["Scaffold (source/, lib/)"] = has_scaffold
+        if has_scaffold:
+            present.append("Scaffold soloader (source/, lib/)")
+        else:
+            missing.append("Scaffold soloader (source/, lib/)")
     else:
-        missing.append("Scaffold soloader (source/, lib/)")
+        has_scaffold = (project_dir / "source").is_dir() and bool(list((project_dir / "source").glob("*.[chS]")))
+        details["Scaffold loader Mach-O (source/)"] = has_scaffold
+        if has_scaffold:
+            present.append("Scaffold loader Mach-O (source/)")
+        else:
+            missing.append("Scaffold loader Mach-O (source/ con código)")
 
-    # 6. APK / Extract
-    has_apk = any(f for f in project_dir.glob("*.apk") if not f.name.startswith("._"))
-    extract_dirs = [d for d in project_dir.glob("*_extract") if d.is_dir() and not d.name.startswith("._")]
-    has_extract = bool(extract_dirs and any((d / "lib").is_dir() for d in extract_dirs))
-    details["APK / extract"] = has_apk or has_extract
-    if has_apk or has_extract:
-        present.append("APK original y/o extracción con lib/")
+    # 6. Package source (APK vs IPA / .app)
+    if platform == "android":
+        has_apk = any(f for f in project_dir.glob("*.apk") if not f.name.startswith("._"))
+        extract_dirs = [d for d in project_dir.glob("*_extract") if d.is_dir() and not d.name.startswith("._")]
+        has_extract = bool(extract_dirs and any((d / "lib").is_dir() for d in extract_dirs))
+        has_app_source = has_apk or has_extract
+        details["APK / extract"] = has_app_source
+        if has_app_source:
+            present.append("APK original y/o extracción con lib/")
+        else:
+            missing.append("APK o carpeta de extracción *_extract/")
     else:
-        missing.append("APK o carpeta de extracción *_extract/")
+        has_ipa = any(f for f in project_dir.glob("*.ipa") if not f.name.startswith("._"))
+        has_game_app = (project_dir / "game_app").exists()
+        has_app_bundle = any(d for d in project_dir.glob("*.app") if not d.name.startswith("._")) or (project_dir / "Payload").is_dir()
+        has_app_source = has_ipa or has_game_app or has_app_bundle
+        details["IPA / app bundle (game_app, *.app)"] = has_app_source
+        if has_app_source:
+            present.append("App bundle iOS y/o IPA original (game_app / *.app / *.ipa)")
+        else:
+            missing.append("IPA original (*.ipa) o app bundle (game_app / Payload/*.app)")
 
     # 7. Decompiled Java (apk_jadx)
-    jadx_dir = project_dir / "decompiled" / "apk_jadx"
-    has_jadx = jadx_dir.is_dir() and ((jadx_dir / "sources").is_dir() or (jadx_dir / "resources").is_dir())
-    details["Java decompilado (decompiled/apk_jadx)"] = has_jadx
-    if has_jadx:
-        present.append("Java decompilado (decompiled/apk_jadx)")
+    if platform == "android":
+        jadx_dir = project_dir / "decompiled" / "apk_jadx"
+        has_jadx = jadx_dir.is_dir() and ((jadx_dir / "sources").is_dir() or (jadx_dir / "resources").is_dir())
+        details["Java decompilado (decompiled/apk_jadx)"] = has_jadx
+        if has_jadx:
+            present.append("Java decompilado (decompiled/apk_jadx)")
+        else:
+            missing.append("Java decompilado (decompiled/apk_jadx)")
     else:
-        missing.append("Java decompilado (decompiled/apk_jadx)")
+        has_jadx = True
+        details["Java decompilado (apk_jadx)"] = True
+        present.append("Java decompilado: N/A (iOS usa Mach-O nativo, no JVM)")
 
-    # 8. Decompiled Native (ghidra)
-    ghidra_dirs = [d for d in project_dir.glob("decompiled/*/ghidra") if d.is_dir()]
-    has_ghidra = any((d / "out_ghidra.c").is_file() or (d / "out_angr.c").is_file() for d in ghidra_dirs)
-    details["Decompilación nativa (decompiled/*/ghidra)"] = has_ghidra
-    if has_ghidra:
-        present.append("Decompilación nativa (Ghidra)")
+    # 8. Decompiled Native / Binary analysis
+    if platform == "android":
+        ghidra_dirs = [d for d in project_dir.glob("decompiled/*/ghidra") if d.is_dir()]
+        has_ghidra = any((d / "out_ghidra.c").is_file() or (d / "out_angr.c").is_file() for d in ghidra_dirs)
+        details["Decompilación nativa (decompiled/*/ghidra)"] = has_ghidra
+        if has_ghidra:
+            present.append("Decompilación nativa (Ghidra)")
+        else:
+            missing.append("Decompilación nativa (Ghidra out_ghidra.c)")
     else:
-        missing.append("Decompilación nativa (Ghidra out_ghidra.c)")
+        ghidra_dirs = [d for d in project_dir.glob("decompiled/*/ghidra") if d.is_dir()]
+        has_ghidra_native = any((d / "out_ghidra.c").is_file() or (d / "out_angr.c").is_file() for d in ghidra_dirs)
+        has_macho_tools = (project_dir / "tools" / "macho_prep.py").exists() or (project_dir / "tools" / "annotate.py").exists()
+        has_rebase = bool(list(project_dir.glob("**/rebase.bin")))
+        has_native_analysis = has_ghidra_native or has_macho_tools or has_rebase
+        details["Análisis binario Mach-O (rebase.bin / macho_prep / Ghidra)"] = has_native_analysis
+        if has_native_analysis:
+            present.append("Análisis binario Mach-O (rebase.bin / macho_prep / Ghidra)")
+        else:
+            missing.append("Análisis binario Mach-O (macho_prep.py, rebase.bin o Ghidra)")
 
-    # 9. JNI analysis documented in plan
-    has_jni_analysis = False
-    if has_plan:
-        plan_text = plan_path.read_text(errors="ignore")
-        if "Auto-detected lifecycle methods" in plan_text or "Exports JNI detectados" in plan_text:
-            has_jni_analysis = True
-    details["Análisis JNI en plan"] = has_jni_analysis
-    if has_jni_analysis:
-        present.append("Métodos JNI y ciclo de vida en PORTING_PLAN.md")
+    # 9. Interface / runtime analysis in plan
+    if platform == "android":
+        has_jni_analysis = False
+        if has_plan:
+            plan_text = plan_path.read_text(errors="ignore")
+            if "Auto-detected lifecycle methods" in plan_text or "Exports JNI detectados" in plan_text:
+                has_jni_analysis = True
+        details["Análisis JNI en plan"] = has_jni_analysis
+        if has_jni_analysis:
+            present.append("Métodos JNI y ciclo de vida en PORTING_PLAN.md")
+        else:
+            missing.append("Métodos JNI / ciclo de vida documentados en plan")
     else:
-        missing.append("Métodos JNI / ciclo de vida documentados en plan")
+        has_ios_analysis = False
+        if has_plan:
+            plan_text = plan_path.read_text(errors="ignore")
+            keywords = ["Mach-O", "mach-o", "armv6", "armv7", "Frontera", "HLE", "Darwin", "imports", "rebase", "Com2uS", "UIKit", "EAGL"]
+            if any(kw in plan_text for kw in keywords):
+                has_ios_analysis = True
+        details["Análisis HLE / Mach-O en plan"] = has_ios_analysis
+        if has_ios_analysis:
+            present.append("Arquitectura Mach-O / frontera HLE documentada en plan")
+        else:
+            missing.append("Arquitectura Mach-O / frontera HLE documentada en plan")
 
-    is_complete = (
-        has_cfg and has_cmake and has_git and has_gitignore and
-        has_plan and has_progress and has_claude and has_skills and
-        has_scaffold and (has_apk or has_extract)
-    )
+    if platform == "android":
+        is_complete = (
+            has_cfg and has_cmake and has_git and has_gitignore and
+            has_plan and has_progress and has_claude and has_skills and
+            has_scaffold and has_app_source
+        )
+    else:
+        is_complete = (
+            has_cfg and has_cmake and has_git and has_gitignore and
+            has_plan and has_progress and has_claude and has_skills and
+            has_scaffold and has_app_source and has_native_analysis and has_ios_analysis
+        )
 
     return {
         "is_complete": is_complete,
@@ -1913,6 +2677,7 @@ def check_port_completeness(project_dir):
         "present": present,
         "details": details,
         "metadata": metadata,
+        "platform": platform,
     }
 
 
@@ -1921,7 +2686,7 @@ def complete_port(project_dir, global_cfg=None, skip_ghidra=False, skip_jadx=Fal
     @brief Completes an incomplete or interrupted port, adding any missing
            scaffolding, git initialization, anti-DMCA .gitignore, plans
            (PORTING_PLAN.md, port_progress.md, CLAUDE.md, .claude/skills),
-           JNI stubs, and .psvita-toolkit.json.
+           JNI stubs (Android) / Mach-O config (iOS), and .psvita-toolkit.json.
     @param project_dir Path to the port directory.
     @param global_cfg Global config dict (loaded if None).
     @param skip_ghidra If True, do not attempt to run Ghidra decompiler.
@@ -1945,6 +2710,10 @@ def complete_port(project_dir, global_cfg=None, skip_ghidra=False, skip_jadx=Fal
         print(f"{C.GREEN}[+] No faltan componentes estructurales.{C.RESET}")
 
     meta = audit.get("metadata", {})
+    platform = meta.get("platform") or detect_project_platform(project_dir, meta)
+
+    if platform == "ios":
+        return complete_port_ios(project_dir, global_cfg, meta, skip_ghidra=skip_ghidra)
     cmake_path = project_dir / "CMakeLists.txt"
     cmake_text = cmake_path.read_text(errors="ignore") if cmake_path.exists() else ""
 
@@ -2149,16 +2918,26 @@ def run_wizard(global_cfg):
                 if tui.confirm("¿Deseas completarla/repararla agregando lo que falta?", default=True):
                     return complete_port(new_dir, global_cfg=global_cfg, skip_ghidra=ctx.get("skip_ghidra", False))
 
-        tui.clear()
-        tui.print_banner(t("init_port.creating_port_title", game_name=ctx['game_name']))
-        setup_repo_dir(global_cfg, ctx)
-        place_apk_and_detect(ctx)
-        decompile(global_cfg, ctx, have_jadx, have_docker_so, skip_ghidra=ctx.get("skip_ghidra", False))
-        git_init_and_ignore(ctx)
-        write_plan_and_progress(ctx)
-        analyze_engine_and_jni(ctx)
-        write_claude_md_and_skills(global_cfg, ctx)
-        project_cfg = write_project_config(ctx)
+        if ctx.get("platform") == "ios":
+            tui.clear()
+            tui.print_banner(t("init_port.creating_port_title", game_name=ctx['game_name']))
+            setup_repo_dir_ios(global_cfg, ctx)
+            place_ipa_and_detect(ctx)
+            git_init_and_ignore(ctx)
+            write_plan_and_progress_ios(ctx)
+            write_claude_md_and_skills(global_cfg, ctx)
+            project_cfg = write_project_config(ctx)
+        else:
+            tui.clear()
+            tui.print_banner(t("init_port.creating_port_title", game_name=ctx['game_name']))
+            setup_repo_dir(global_cfg, ctx)
+            place_apk_and_detect(ctx)
+            decompile(global_cfg, ctx, have_jadx, have_docker_so, skip_ghidra=ctx.get("skip_ghidra", False))
+            git_init_and_ignore(ctx)
+            write_plan_and_progress(ctx)
+            analyze_engine_and_jni(ctx)
+            write_claude_md_and_skills(global_cfg, ctx)
+            project_cfg = write_project_config(ctx)
 
         print(f"\n{C.CYAN}{C.BOLD}================================================================{C.RESET}")
         print(f"{C.GREEN}{C.BOLD}  {t('init_port.wizard_done', new_dir=ctx['new_dir'])}{C.RESET}")
@@ -2172,7 +2951,7 @@ def run_wizard(global_cfg):
         return None
 
 
-def run_wizard_headless(global_cfg, apk_path=None, game_name=None, titleid=None, slug=None,
+def run_wizard_headless(global_cfg, apk_path=None, ipa_path=None, game_name=None, titleid=None, slug=None,
                          folder_name=None, vita_ip="192.168.1.100", project_path=None,
                          skip_ghidra=False, skip_jadx=False):
     """!
@@ -2180,9 +2959,11 @@ def run_wizard_headless(global_cfg, apk_path=None, game_name=None, titleid=None,
            init` CLI subcommand: builds the same `ctx` dict `prompt_inputs()`
            would have, from arguments instead of prompts, then runs the exact
            same pipeline (`setup_repo_dir` -> ... -> `write_project_config`).
-           Supports resuming/completing an existing or incomplete port.
+           Supports resuming/completing an existing or incomplete port,
+           as well as initializing Android (.apk) or iOS (.ipa) ports.
     @param global_cfg Global config dict.
-    @param apk_path Path to the source `.apk`.
+    @param apk_path Path to the source Android `.apk`.
+    @param ipa_path Path to the source iOS `.ipa`.
     @param game_name Display name of the game.
     @param titleid 9-character TITLEID.
     @param slug Internal slug.
@@ -2207,11 +2988,13 @@ def run_wizard_headless(global_cfg, apk_path=None, game_name=None, titleid=None,
         if target_dir.is_dir() and any(target_dir.iterdir()):
             return complete_port(target_dir, global_cfg=global_cfg, skip_ghidra=skip_ghidra, skip_jadx=skip_jadx)
 
-    if not apk_path:
-        raise RuntimeError("apk_path is required to create a new port from scratch.")
-    apk_path = str(Path(apk_path).expanduser())
-    if not Path(apk_path).exists():
-        raise RuntimeError(t("tui.path_not_found", path=apk_path))
+    if not apk_path and not ipa_path:
+        raise RuntimeError("apk_path or ipa_path is required to create a new port from scratch.")
+
+    is_ios = bool(ipa_path)
+    source_path = str(Path(ipa_path if is_ios else apk_path).expanduser())
+    if not Path(source_path).exists():
+        raise RuntimeError(t("tui.path_not_found", path=source_path))
     if not game_name:
         raise RuntimeError(t("init_port.game_name_required"))
 
@@ -2233,13 +3016,27 @@ def run_wizard_headless(global_cfg, apk_path=None, game_name=None, titleid=None,
         raise RuntimeError(t("init_port.titleid_in_use"))
 
     ctx = {
+        "platform": "ios" if is_ios else "android",
         "game_name": game_name, "slug": slug, "folder_name": folder_name,
-        "project_name": project_name, "apk_path": apk_path,
+        "project_name": project_name,
+        "apk_path": "" if is_ios else source_path,
+        "ipa_path": source_path if is_ios else "",
         "vita_ip": vita_ip, "titleid": titleid, "new_dir": new_dir,
     }
 
+    if is_ios:
+        print(f"\n{C.BOLD}{t('init_port.creating_port_title', game_name=ctx['game_name'])} [iOS]{C.RESET}")
+        setup_repo_dir_ios(global_cfg, ctx)
+        place_ipa_and_detect(ctx)
+        git_init_and_ignore(ctx)
+        write_plan_and_progress_ios(ctx)
+        write_claude_md_and_skills(global_cfg, ctx)
+        project_cfg = write_project_config(ctx)
+        print(f"{C.GREEN}{t('init_port.wizard_done', new_dir=ctx['new_dir'])}{C.RESET}")
+        return project_cfg
+
     have_jadx, have_docker_so = check_prereqs(global_cfg)
-    print(f"\n{C.BOLD}{t('init_port.creating_port_title', game_name=ctx['game_name'])}{C.RESET}")
+    print(f"\n{C.BOLD}{t('init_port.creating_port_title', game_name=ctx['game_name'])} [Android]{C.RESET}")
     setup_repo_dir(global_cfg, ctx)
     place_apk_and_detect(ctx)
     decompile(global_cfg, ctx, have_jadx, have_docker_so, skip_ghidra=skip_ghidra, skip_jadx=skip_jadx)
