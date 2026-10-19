@@ -409,6 +409,11 @@ STRINGS = {
         "en": "Decompile .so libraries with Ghidra now (may take several minutes)?",
         "pt": "Descompilar bibliotecas .so com Ghidra agora (pode levar vários minutos)?",
     },
+    "init_port.prompt_skip_ghidra_ios": {
+        "es": "¿Decompilar el ejecutable Mach-O del IPA ahora (clases ObjC, símbolos e imports con otool/nm + pseudo-C con Ghidra; puede tardar varios minutos)?",
+        "en": "Decompile the IPA's Mach-O executable now (ObjC classes, symbols and imports via otool/nm + Ghidra pseudo-C; may take several minutes)?",
+        "pt": "Descompilar o executável Mach-O do IPA agora (classes ObjC, símbolos e imports via otool/nm + pseudo-C com Ghidra; pode levar vários minutos)?",
+    },
     "init_port.git_init_start": {
         "es": "[*] git init + .gitignore anti-DMCA...",
         "en": "[*] git init + anti-DMCA .gitignore...",
@@ -812,9 +817,9 @@ STRINGS = {
         "pt": "6. Padrão de logs no console",
     },
     "init_port.plan_log_text": {
-        "es": "El log del juego vive en `<DATA_PATH>logs/<slug>_NNN.log` (`<slug>` = {slug}), incremental de\n001 a 999 con `next.idx` (nunca `log_<timestamp>.txt`, nunca base 000, nunca ruta hardcodeada:\nusar `DATA_PATH`). La subida FTP crea `logs/` y `saves/` en la consola aunque estén vacíos.\nComandos del toolkit (sin IA, deterministas): `psvita-toolkit log-standard --fix-dirs` (audita\ny crea los dirs), `psvita-toolkit log-trace --ensure-flag` (inyecta trazas `[TRACE] >> f()` por\nfunción bajo `#ifdef PORT_TRACE`; compilar con `-DPORT_TRACE=ON` para debug, `OFF` para\nproducción, o `psvita-toolkit log-trace --remove` para quitarlas del árbol).",
-        "en": "The game log lives at `<DATA_PATH>logs/<slug>_NNN.log` (`<slug>` = {slug}), incrementing\n001 to 999 with `next.idx` (never `log_<timestamp>.txt`, never 000-based, never a hardcoded\npath: use `DATA_PATH`). The FTP upload creates `logs/` and `saves/` on the console even when\nempty. Toolkit commands (no AI, deterministic): `psvita-toolkit log-standard --fix-dirs` (audits\nand creates the dirs), `psvita-toolkit log-trace --ensure-flag` (injects per-function\n`[TRACE] >> f()` traces under `#ifdef PORT_TRACE`; build with `-DPORT_TRACE=ON` for debug,\n`OFF` for production, or `psvita-toolkit log-trace --remove` to strip them from the tree).",
-        "pt": "O log do jogo fica em `<DATA_PATH>logs/<slug>_NNN.log` (`<slug>` = {slug}), incremental de\n001 a 999 com `next.idx` (nunca `log_<timestamp>.txt`, nunca base 000, nunca caminho hardcoded:\nusar `DATA_PATH`). O upload FTP cria `logs/` e `saves/` no console mesmo vazios.\nComandos do toolkit (sem IA, determinísticos): `psvita-toolkit log-standard --fix-dirs` (audita\ne cria os dirs), `psvita-toolkit log-trace --ensure-flag` (injeta traces `[TRACE] >> f()` por\nfunção sob `#ifdef PORT_TRACE`; compilar com `-DPORT_TRACE=ON` para debug, `OFF` para\nprodução, ou `psvita-toolkit log-trace --remove` para removê-los da árvore).",
+        "es": "El log del juego vive en `<DATA_PATH>logs/<slug>_NNN.log` (en este port: `logs/{slug}_001.log`,\n`{slug}_002.log`, ...), incremental de\n001 a 999 con `next.idx` (nunca `log_<timestamp>.txt`, nunca base 000, nunca ruta hardcodeada:\nusar `DATA_PATH`). La subida FTP crea `logs/` y `saves/` en la consola aunque estén vacíos.\nComandos del toolkit (sin IA, deterministas): `psvita-toolkit log-standard --fix-dirs` (audita\ny crea los dirs), `psvita-toolkit log-trace --ensure-flag` (inyecta trazas `[TRACE] >> f()` por\nfunción bajo `#ifdef PORT_TRACE`; compilar con `-DPORT_TRACE=ON` para debug, `OFF` para\nproducción, o `psvita-toolkit log-trace --remove` para quitarlas del árbol).",
+        "en": "The game log lives at `<DATA_PATH>logs/<slug>_NNN.log` (in this port: `logs/{slug}_001.log`,\n`{slug}_002.log`, ...), incrementing\n001 to 999 with `next.idx` (never `log_<timestamp>.txt`, never 000-based, never a hardcoded\npath: use `DATA_PATH`). The FTP upload creates `logs/` and `saves/` on the console even when\nempty. Toolkit commands (no AI, deterministic): `psvita-toolkit log-standard --fix-dirs` (audits\nand creates the dirs), `psvita-toolkit log-trace --ensure-flag` (injects per-function\n`[TRACE] >> f()` traces under `#ifdef PORT_TRACE`; build with `-DPORT_TRACE=ON` for debug,\n`OFF` for production, or `psvita-toolkit log-trace --remove` to strip them from the tree).",
+        "pt": "O log do jogo fica em `<DATA_PATH>logs/<slug>_NNN.log` (neste port: `logs/{slug}_001.log`,\n`{slug}_002.log`, ...), incremental de\n001 a 999 com `next.idx` (nunca `log_<timestamp>.txt`, nunca base 000, nunca caminho hardcoded:\nusar `DATA_PATH`). O upload FTP cria `logs/` e `saves/` no console mesmo vazios.\nComandos do toolkit (sem IA, determinísticos): `psvita-toolkit log-standard --fix-dirs` (audita\ne cria os dirs), `psvita-toolkit log-trace --ensure-flag` (injeta traces `[TRACE] >> f()` por\nfunção sob `#ifdef PORT_TRACE`; compilar com `-DPORT_TRACE=ON` para debug, `OFF` para\nprodução, ou `psvita-toolkit log-trace --remove` para removê-los da árvore).",
     },
     "init_port.plan_written": {
         "es": "[+] PORTING_PLAN.md escrito.",
@@ -1244,7 +1249,8 @@ def prompt_inputs(global_cfg):
     if not tui.confirm(f"\n{t('init_port.confirm_continue')}"):
         raise RuntimeError(t("init_port.cancelled_by_user"))
 
-    skip_ghidra = not tui.confirm(f"\n{t('init_port.prompt_skip_ghidra')}", default=True)
+    prompt_key = "init_port.prompt_skip_ghidra_ios" if platform == "ios" else "init_port.prompt_skip_ghidra"
+    skip_ghidra = not tui.confirm(f"\n{t(prompt_key)}", default=True)
 
     return {
         "platform": platform,
@@ -1347,6 +1353,15 @@ def setup_repo_dir_ios(global_cfg, ctx):
         text = hle_path.read_text(errors="ignore")
         text = text.replace("ux0:data/ios_game/", f"ux0:data/{ctx['slug']}/")
         hle_path.write_text(text)
+
+    # Estándar de logs (log_kit): logs/<slug>_NNN.log, no el genérico log_NNN.log del boilerplate
+    main_c = new_dir / "source" / "main.c"
+    if main_c.exists():
+        text = main_c.read_text(errors="ignore")
+        text = text.replace('"log_%03d.log"', f'"{ctx["slug"]}_%03d.log"')
+        text = text.replace('"log_%3d.log"', f'"{ctx["slug"]}_%3d.log"')
+        text = text.replace("(log_001.log .. log_999.log)", f"({ctx['slug']}_001.log .. {ctx['slug']}_999.log)")
+        main_c.write_text(text)
 
     # Asegurar permisos de ejecución en scripts de tools/
     tools_dir = new_dir / "tools"
@@ -2139,6 +2154,115 @@ def place_ipa_and_detect(ctx):
     })
 
 
+def find_macho_executable(project_dir):
+    """!
+    @brief Locate the iOS game's main Mach-O executable (`CFBundleExecutable`)
+           via `game_app/` or `<slug>_extract/Payload/*.app`.
+    @param project_dir Path to the port directory.
+    @return Path to the executable, or `None` if not found.
+    """
+    project_dir = Path(project_dir)
+    app_dirs = [project_dir / "game_app"] + sorted(project_dir.glob("*_extract/Payload/*.app"))
+    for app_dir in app_dirs:
+        plist = app_dir / "Info.plist"
+        if not plist.is_file():
+            continue
+        try:
+            with open(plist, "rb") as fp:
+                exe = plistlib.load(fp).get("CFBundleExecutable", "")
+        except Exception:
+            continue
+        if exe and (app_dir / exe).is_file():
+            return app_dir / exe
+    return None
+
+
+def decompile_macho(project_dir, exec_path=None, skip_ghidra=False):
+    """!
+    @brief iOS counterpart of `decompile()`: an IPA has no `.so` nor Java, all native
+           code lives in ONE Mach-O executable. Dumps what the agent needs to write
+           the loader into `decompiled/macho/`, plus optional Ghidra pseudo-C into
+           `decompiled/<exec>_<arch>/ghidra/` (same layout disasm/crash tools glob).
+    @param project_dir Path to the port directory.
+    @param exec_path Mach-O executable; auto-detected when `None`.
+    @param skip_ghidra If True, only the otool/nm dumps are produced.
+    @return dict `{"exec": Path|None, "dumps_ok": bool, "ghidra_ok": bool}`.
+    """
+    project_dir = Path(project_dir)
+    exec_path = Path(exec_path) if exec_path else find_macho_executable(project_dir)
+    result = {"exec": exec_path, "dumps_ok": False, "ghidra_ok": False}
+    if not exec_path or not exec_path.is_file():
+        print(f"{C.YELLOW}[!] No se encontró el ejecutable Mach-O (game_app/Info.plist → CFBundleExecutable).{C.RESET}")
+        return result
+
+    out_dir = project_dir / "decompiled" / "macho"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Equivalente iOS de jadx + objdump: frameworks a emular, clases/selectores ObjC, símbolos, imports
+    dumps = {
+        "frameworks.txt": ["otool", "-L", str(exec_path)],
+        "objc_classes.txt": ["otool", "-ov", str(exec_path)],
+        "symbols.txt": ["nm", "-n", str(exec_path)],
+        "imports.txt": ["nm", "-u", str(exec_path)],
+    }
+    for name, cmd in dumps.items():
+        if not _have(cmd[0]):
+            print(f"{C.YELLOW}[!] '{cmd[0]}' no está instalado (Xcode CLT) -- se omite {name}.{C.RESET}")
+            continue
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
+        (out_dir / name).write_text(r.stdout)
+        result["dumps_ok"] = result["dumps_ok"] or bool(r.stdout.strip())
+    if result["dumps_ok"]:
+        print(f"{C.GREEN}[+] Dumps Mach-O (frameworks, ObjC, símbolos, imports) en {out_dir}{C.RESET}")
+
+    if skip_ghidra:
+        print(f"{C.YELLOW}{t('init_port.so_decompile_skipped_flag')}{C.RESET}")
+        return result
+    if not (_have("docker") and _have_docker_image("devrvk/so-decompiler")):
+        print(f"{C.YELLOW}{t('init_port.so_decompile_skipped')}{C.RESET}")
+        return result
+
+    arch = inspect_macho_binary(exec_path).get("archs", ["armv7"])[0]
+    ghidra_out = project_dir / "decompiled" / f"{exec_path.name}_{arch}" / "ghidra"
+    if (ghidra_out / "out_ghidra.c").is_file() and (ghidra_out / "out_ghidra.c").stat().st_size > 0:
+        print(f"{C.GREEN}[+] {exec_path.name} ({arch}) ya tiene decompilación en {ghidra_out}. Reutilizando.{C.RESET}")
+        result["ghidra_ok"] = True
+        return result
+    ghidra_out.mkdir(parents=True, exist_ok=True)
+
+    # Ghidra no importa bien binarios fat: se adelgaza a la primera arquitectura
+    input_bin = exec_path
+    if _have("lipo") and len(inspect_macho_binary(exec_path).get("archs", [])) > 1:
+        input_bin = out_dir / f"{exec_path.name}_{arch}"
+        subprocess.run(["lipo", "-thin", arch, str(exec_path), "-output", str(input_bin)], capture_output=True)
+        if not input_bin.is_file():
+            input_bin = exec_path
+
+    print(t("init_port.decompiling_so", name=exec_path.name, abi=arch))
+    # ponytail: assumes devrvk/so-decompiler's Ghidra headless auto-detects Mach-O; verify on first IPA, else wire analyzeHeadless directly.
+    try:
+        r = subprocess.run([
+            "docker", "run", "--rm", "--platform", "linux/amd64",
+            "-v", f"{input_bin.parent}:/input", "-v", f"{ghidra_out}:/output",
+            "devrvk/so-decompiler", "decompile", f"/input/{input_bin.name}", "/output",
+        ])
+        result["ghidra_ok"] = r.returncode == 0
+        print(t("init_port.so_decompile_ok", path=ghidra_out) if result["ghidra_ok"]
+              else t("init_port.so_decompile_failed", name=exec_path.name))
+    except KeyboardInterrupt:
+        print(f"\n{C.YELLOW}{t('init_port.so_decompile_interrupted')}{C.RESET}")
+    return result
+
+
+def _record_macho_decompile(ctx, result):
+    """!
+    @brief Copy `decompile_macho()` outcome into the wizard ctx (read by the iOS plan).
+    """
+    ctx["macho_dumps_ok"] = result["dumps_ok"]
+    ctx["ghidra_ok"] = result["ghidra_ok"]
+    if result["exec"] and not ctx.get("executable_name"):
+        ctx["executable_name"] = result["exec"].name
+
+
 def generate_progress_from_plan(game_name, plan_text):
     """!
     @brief Extracts tasks/phases from an existing PORTING_PLAN.md to create port_progress.md.
@@ -2180,10 +2304,42 @@ def generate_progress_from_plan(game_name, plan_text):
 """
 
 
+def _macho_plan_facts(new_dir):
+    """!
+    @brief Summarize `decompiled/macho/` dumps for the iOS plan: linked frameworks,
+           ObjC class count and lifecycle entry-point candidates (the iOS analog of
+           the Android plan's `Java_*` exports list).
+    @param new_dir Port directory.
+    @return dict `{"frameworks": [...], "classes": int, "methods": int, "lifecycle": [...]}`.
+    """
+    macho_dir = Path(new_dir) / "decompiled" / "macho"
+    facts = {"frameworks": [], "classes": 0, "methods": 0, "lifecycle": []}
+    fw_file = macho_dir / "frameworks.txt"
+    if fw_file.is_file():
+        for line in fw_file.read_text(errors="ignore").splitlines()[1:]:
+            lib = line.strip().split(" (")[0]
+            if lib:
+                facts["frameworks"].append(lib.rsplit("/", 1)[-1])
+    sym_file = macho_dir / "symbols.txt"
+    if sym_file.is_file():
+        methods = re.findall(r"([-+]\[(\S+) [^\]]+\])", sym_file.read_text(errors="ignore"))
+        facts["methods"] = len(methods)
+        facts["classes"] = len({cls for _, cls in methods})
+        lifecycle_re = re.compile(r"application(DidFinishLaunching|WillResignActive|DidBecomeActive|WillTerminate|DidEnterBackground)"
+                                  r"|didFinishLaunchingWithOptions|drawView|drawFrame|startAnimation|layoutSubviews"
+                                  r"|touches(Began|Moved|Ended)|initWithFrame")
+        # App delegate first: it is the entry point; the cap otherwise drops it behind ad/SDK views
+        facts["lifecycle"] = sorted({m for m, _ in methods if lifecycle_re.search(m)},
+                                    key=lambda m: ("application" not in m, m))[:25]
+    return facts
+
+
 def write_plan_and_progress_ios(ctx):
     """!
     @brief Generates PORTING_PLAN.md and port_progress.md for an iOS Mach-O loader port,
-           informed by the Inotia2-vita case study and binary inspection.
+           informed by the Inotia2-vita case study and binary inspection. Mirrors the
+           Android plan phase by phase, translating each soloader/FalsoJNI step to
+           its Mach-O/ObjC equivalent so an agent can follow it mechanically.
     """
     import datetime
     new_dir = ctx["new_dir"]
@@ -2194,92 +2350,199 @@ def write_plan_and_progress_ios(ctx):
     imports_list = ctx.get("imports_list", [])
     exec_name = ctx.get("executable_name", "game_exec")
     cryptid = macho_info.get("cryptid", 0)
+    slug = ctx["slug"]
+    facts = _macho_plan_facts(new_dir)
+    decompiled = ctx.get("macho_dumps_ok") or (new_dir / "decompiled" / "macho").is_dir()
 
-    # Clasificar imports detectados por categoría
-    imp_gl = [i for i in imports_list if "gl" in i.lower()]
-    imp_audio = [i for i in imports_list if any(k in i.lower() for k in ("audio", "al", "sound", "fmod"))]
-    imp_objc = [i for i in imports_list if "objc" in i.lower() or "cf" in i.lower() or "ns" in i.lower()]
-    imp_posix = [i for i in imports_list if any(k in i.lower() for k in ("pthread", "socket", "malloc", "free", "printf"))]
+    frameworks = "".join(f"- `{f}`\n" for f in facts["frameworks"]) or \
+        "- _Pending: run `otool -L` (Utilities → Re-run decompilation)._\n"
+    lifecycle = "".join(f"- `{m}`\n" for m in facts["lifecycle"]) or \
+        "- _None detected yet: grep `decompiled/macho/symbols.txt` for the app delegate and the EAGLView/render class._\n"
+    cryptid_note = ("decrypted, ready to load" if cryptid == 0 else
+                    "**[!] ENCRYPTED: dump it decrypted on a jailbroken device (frida-ios-dump / bfdecrypt / Clutch) "
+                    "and replace the executable before anything else -- an encrypted binary data-aborts on load**")
 
     plan = f"""# {ctx['game_name']} (iOS) → PS Vita
 
-Port de {ctx['game_name']} (iOS, Mach-O {archs_str}) a PS Vita con loader de Mach-O propio.
-Basado en la arquitectura probada de `ios-loader-boilerplate` (caso de estudio Inotia2-vita).
+> Port plan generated by psvita-toolkit on {today}. Source: iOS IPA, 32-bit Mach-O, loaded on the
+> Vita by a custom Mach-O loader (`ios-loader-boilerplate`, proven on Inotia2-vita).
 
-## Lo confirmado del binario ({today})
+> **For AI agents:** this file is the port's source of truth. Work phases in order. Tick `[x]` only
+> after confirming on real hardware and append the evidence (log file, commit, dump) to the item.
+> Never record an engine fact without symbol/disassembly evidence. Keep this file in English.
+> This is NOT an Android port: there is no `.so`, no JNI, no Java. Do not use soloader/FalsoJNI
+> instructions; use the Android → iOS equivalence table below instead.
 
-- Ejecutable: `{exec_name}`, thin/fat **{archs_str}**.
-- Cifrado FairPlay: **cryptid {cryptid}** ({'descifrado, listo para ejecución' if cryptid == 0 else '[!] CIFRADO: Requiere descifrado con Clutch/frida-ios-dump antes de correr en PS Vita'}).
-- Tamaño: {macho_info.get('size_kb', 0):.0f} KB.
-- Bundle ID: `{ctx.get('bundle_id', '')}`.
-- Paquete original: `{ctx.get('ipa_basename', '')}`.
-- App bundle: `game_app` → `{ctx.get('app_dir', '')}`.
-- Palabras de rebase (`rebase.bin`): **{rebase_words if rebase_words else 'Por generar con tools/macho_prep.py'}**.
-- Imports únicos detectados: **{len(imports_list)}** (GL: {len(imp_gl)}, Audio: {len(imp_audio)}, ObjC/CF: {len(imp_objc)}, POSIX/libc: {len(imp_posix)}).
+## 0. Game
 
-## Reglas Críticas de ABI de iOS en PS Vita
+- **Game:** {ctx['game_name']}
+- **Bundle ID:** `{ctx.get('bundle_id', '')}`
+- **IPA:** `{ctx.get('ipa_basename', '')}`
+- **App bundle:** `game_app` → `{ctx.get('app_dir', '')}`
+- **TITLEID:** `{ctx['titleid']}`
 
-1. **`r9` temporal**: En ARMv6/v7 iOS, `r9` es usado como temporal por el compilador y no se preserva. Compilar con `-ffixed-r9` y usar `call_guest` al llamar al juego.
-2. **Convención SoftFP**: Floats en registros enteros (`r0..r3`). `vitaGL` vendorizada con `SOFTFP_ABI=1` obligatoria para no corromper la proyección en libgxm.
-3. **Alineación de pila a 4 bytes**: El juego asume pila alineada a 4 bytes. Todo import/hook llamado desde el binario entra por `ml_align_call` (asm.S), que realinea a 8 bytes AAPCS copiando argumentos de stack.
-4. **printf de Darwin**: Enteros y dobles de 64 bits viajan en palabras de 32 bits contiguas sin alinear; soportar `%@` de Objective-C (`darwin_printf.c`).
+## 1. Binary facts ({today})
 
-## Estructura en la Vita (`ux0:data/{ctx['slug']}/`)
+- **Executable:** `{exec_name}` ({macho_info.get('size_kb', 0):.0f} KB), architectures **{archs_str}**.
+- **FairPlay:** cryptid {cryptid} -- {cryptid_note}.
+- **Rebase words (`rebase.bin`):** {rebase_words or 'pending -- run `python3 -I tools/macho_prep.py`'}.
+- **Unique imports (macho_prep):** {len(imports_list)}.
+- **ObjC:** {facts['classes']} classes / {facts['methods']} methods in the symbol table.
 
-```
-ux0:data/{ctx['slug']}/
-  {exec_name}.app/   bundle del IPA limpio (ejecutable + recursos)
-  rebase.bin         punteros absolutos reubicados (MACHO_SLIDE = 0x98000000)
-  saves/             partidas guardadas (Documents/ de iOS)
-  logs/              log_001.log .. log_999.log rotativos
-```
+### Linked frameworks (what the loader must emulate)
 
-## Arquitectura del Loader
+{frameworks}
+### Lifecycle entry-point candidates (iOS analog of `Java_*` exports)
 
-| Archivo | Qué reemplaza / funcionalidad |
+{lifecycle}
+## 2. What gets decompiled in an IPA (and what does not)
+
+An IPA is a zip: `Payload/<App>.app/` = **one** Mach-O executable + resources. All game code is in
+that executable (unless `Frameworks/*.dylib` exist -- 32-bit-era games almost never have them).
+
+| Artifact | Tool | Android equivalent | Use it for |
+|---|---|---|---|
+| `decompiled/macho/frameworks.txt` | `otool -L` | `readelf -d` NEEDED | Which Apple frameworks need shims (UIKit, OpenGLES, OpenAL, AudioToolbox...). |
+| `decompiled/macho/objc_classes.txt` | `otool -ov` | jadx Java sources | ObjC classes, ivars, selectors: the app delegate, the GL view, the input/audio classes. |
+| `decompiled/macho/symbols.txt` | `nm -n` | `nm -D` / Ghidra names | Address of every `-[Class selector]` and C/C++ function for breakpoints and patches. |
+| `decompiled/macho/imports.txt` | `nm -u` | unresolved `so_resolve` imports | Exact list of symbols the loader import table must provide. |
+| `decompiled/{exec_name}_<arch>/ghidra/` | Ghidra (devrvk/so-decompiler) | `decompiled/<lib>_<abi>/ghidra/` | Pseudo-C of the game logic, for crash triage and hooks. |
+| `tools/annotate.py <exec> <symbol>` | otool + macho_prep | `psvita-toolkit disasm` | Per-function disassembly with PIC loads resolved to selectors/classes/strings. |
+
+Do NOT decompile: resources (`.png` CgBI, `.plist`, audio, `.nib`) -- they are loaded as-is
+(`source/cgbi.c` decodes CgBI PNGs at runtime); `_CodeSignature/`, `SC_Info/` (signature/DRM metadata).
+
+## 3. Android → iOS equivalence (read before every phase)
+
+| Android port (soloader) | This iOS port (Mach-O loader) |
 |---|---|
-| `source/macho.c` / `asm.S` | Dyld Mach-O: carga, rebase, imports, thunks con trace, `call_guest`, `ml_align_call` |
-| `source/darwin.c` | libc/libgcc/pthread/semáforos de Darwin con `pthread_detach` seguro contra SceUIDs |
-| `source/darwin_printf.c` | Formateador variádico con soporte de dobles desalineados y `%@` |
-| `source/objc.c` | Mini-runtime ObjC (`objc_msgSend`, `NSString`, `UIFont` atlas FreeType, `NSBundle`, IME) |
-| `source/gles.c` | Backend GLES1/2 sobre vitaGL vendorizada con FBO virtual escalado/rotado |
-| `source/cgbi.c` | Soporte transparente para imágenes PNG CgBI de Apple |
-| `source/coreaudio.c` | AudioUnit RemoteIO + AudioSession sobre `sceAudioOut` |
-| `source/input.c` | Touch frontal + botones físicos mapeados a la capa táctil |
-| `source/patch.c` | Parches y hooks específicos de {ctx['game_name']} |
+| `libgame.so` | `{exec_name}` (Mach-O, loaded at `MACHO_SLIDE = 0x98000000`) |
+| `so_file_load` / `so_relocate` / `so_resolve` | `macho_load()` + `rebase.bin` + import binding (`source/macho.c`, `source/imports.c`) |
+| `default_dynlib[]` import table | `source/imports.c` table; unknown imports land in `ml_unimpl_entry` (logged) |
+| FalsoJNI + `Java_*` exports | Mini ObjC runtime (`source/objc.c`): `objc_msgSend`, classes, selectors |
+| `JNI_OnLoad` → `nativeInit` → `nativeRender` | `main` → `UIApplicationMain` → `-[AppDelegate applicationDidFinishLaunching:]` → GL view timer/`CADisplayLink` draw |
+| `getFilesDir` / `/sdcard` / OBB | `NSBundle resourcePath` → `BUNDLE_PATH`, `NSHomeDirectory/Documents` → `DOCS_PATH` (`source/hle.h`) |
+| Bionic libc | Darwin libc/pthread (`source/darwin.c`) + Darwin printf (`source/darwin_printf.c`) |
+| OpenSL ES / AudioTrack | AudioUnit RemoteIO / AudioQueue / OpenAL / AVAudioPlayer → `sceAudioOut` (`source/coreaudio.c`) |
+| `MotionEvent` | `UITouch` phases `touchesBegan/Moved/Ended` (`source/input.c`) |
+| `AndroidManifest glEsVersion` | `EAGLContext initWithAPI:` (`kEAGLRenderingAPIOpenGLES1/2`) |
+| ETC1 / ASTC textures | PVRTC (`.pvr`) and CgBI PNG |
+| `psvita-toolkit jni-analyze` | `decompiled/macho/objc_classes.txt` + `tools/annotate.py` |
 
-## Fases
+## 4. iOS-on-Vita ABI rules (violating any of these = random crashes)
 
-- [x] **0. Repo y herramientas**: IPA extraído, binario analizado, `game_app` symlink, scaffolding creado.
-- [ ] **1. Loader mínimo** — GATE: el log llega al bucle principal / inicialización de motor.
-  - [ ] Carga de segmentos en memoria con `macho_load` (slide `0x98000000`).
-  - [ ] Aplicación de `rebase.bin`.
-  - [ ] Resolución de imports indispensables de libc, math, pthread y runtime.
-  - [ ] Ejecución de inicializadores globales con `macho_run_inits()`.
-- [ ] **2. Render** — GATE: primer frame / pantalla de inicio visible en consola física.
-  - [ ] Inicialización de vitaGL y FBO virtual de presentación.
-  - [ ] Manejo de texturas PNG CgBI con `cgbi.c`.
-  - [ ] Swap de buffers funcional a ~60 FPS sin splashscreen freeze.
-- [ ] **3. Input** — GATE: controles funcionales in-game.
-  - [ ] Multitouch frontal de la Vita mapeado a las coordenadas lógicas del juego.
-  - [ ] Mapeo de botones físicos (D-Pad, Cross, Circle, Square, Triangle, Triggers).
-- [ ] **4. Texto y fuentes** — GATE: diálogos y menús legibles.
-  - [ ] FreeType sobre atlas de fuentes (fuentes `sa0:data/font/pvf/` o `font.ttf` local).
-- [ ] **5. Audio y video** — GATE: música y efectos de sonido activos.
-  - [ ] RemoteIO / AudioSession redirigido al hilo `sceAudioOut`.
-  - [ ] Formato y decodificación de audio de streaming o efectos.
-- [ ] **6. Guardado y LiveArea** — GATE: progreso persistente y LiveArea completa.
-  - [ ] Persistencia de partidas en `ux0:data/{ctx['slug']}/saves/`.
-  - [ ] LiveArea personalizada con `icon0.png`, `pic0.png`, `bg0.png`, `startup.png`.
+1. **`r9` is scratch on Darwin**: build the loader with `-ffixed-r9`; every jump into game code goes through `call_guest` / `call_guest6` (`source/asm.S`).
+2. **SoftFP**: floats travel in `r0..r3`. Vendored vitaGL MUST be built with `SOFTFP_ABI=1`. Any shim taking `float`/`double` uses `__attribute__((pcs("aapcs")))`.
+3. **4-byte stack**: iOS only aligns `sp` to 4. Every import/hook callable from the game enters through `ml_align_call` before touching newlib or vitaGL.
+4. **Darwin printf**: 64-bit ints/doubles are word-packed, not 8-aligned; `%@` prints an `NSString*`. Route all game printf/NSLog through `darwin_printf.c` (`tools/printf_check.py` validates).
+5. **ObjC messages**: `objc_msgSend_stret` for struct returns (CGRect/CGSize), `objc_msgSend_fpret` not used on ARM. Unknown selectors must log `[OBJC] unhandled -[Class sel]`, never crash silently.
 
-## Iteración y Triage de Crashes
+## 5. On-console layout (`ux0:data/{slug}/`)
 
-1. Staging de assets: `tools/stage_data.sh`
-2. Despliegue por FTP: `python3 -I tools/deploy_data.py` (o `psvita-toolkit deploy --data`)
-3. Si ocurre un crash:
-   - Descargar logs: `python3 -I tools/deploy_data.py --logs`
-   - Analizar volcado: `psvita-toolkit analyze logs/<dump>.psp2dmp --elf build/{ctx['project_name']}`
-   - Si el PC está en `0x98xxxxxx`, restar `0x98000000` para ubicar la dirección en el Mach-O original con `tools/annotate.py`.
+```
+ux0:data/{slug}/
+  game_app/          the .app bundle (executable + resources) copied from the IPA
+  rebase.bin         absolute pointers to relocate (tools/macho_prep.py)
+  saves/             iOS Documents/ (savegames, settings)
+  logs/              {slug}_001.log .. {slug}_999.log (rotating)
+```
+
+## Phases
+
+Each phase: do the steps in order, build (`psvita-toolkit build`), deploy (`psvita-toolkit deploy`),
+run on hardware, read the newest `logs/{slug}_NNN.log`, and only then tick the item.
+
+### Phase 1: Repo and tools
+- [x] IPA extracted, `game_app` symlink, ios-loader-boilerplate merged, CMake/`hle.h` adapted to `{slug}`.
+- [{'x' if cryptid == 0 else ' '}] Executable decrypted (cryptid 0).
+- [{'x' if rebase_words else ' '}] `rebase.bin` + `docs/macho_report.txt` generated (`python3 -I tools/macho_prep.py game_app/{exec_name} ux0_data/{slug}/rebase.bin --report docs/macho_report.txt`).
+
+### Phase 2: Decompilation and inventory
+- [{'x' if decompiled else ' '}] `decompiled/macho/` dumps (frameworks, ObjC classes, symbols, imports) -- section 2.
+- [{'x' if ctx.get('ghidra_ok') else ' '}] Ghidra pseudo-C of `{exec_name}` (optional but needed for crash triage).
+- [ ] Classify `imports.txt` into: libc/math/pthread (map to newlib/darwin.c), GL (map to vitaGL), ObjC/CF (objc.c), audio, network/GameKit/StoreKit (stub returning "unavailable").
+- [ ] Write the classification as a table in `docs/imports.md` (symbol → shim file → status).
+
+### Phase 3: Real engine analysis
+- [ ] Identify the engine by symbols (`grep -i` on `symbols.txt`: `cocos2d`, `Unity`, `SIO2`, `oolong`, `Box2D`, custom `CS_`/`GS_` prefixes), never assume "same engine as another port".
+- [ ] Map the lifecycle from section 1's candidates: app delegate class, GL view class (`EAGLView`/`ES1Renderer`), how the frame loop is driven (`NSTimer`, `CADisplayLink`, `performSelector:afterDelay:`, or a game thread).
+- [ ] Find where resources are opened (`fopen`, `NSBundle pathForResource:ofType:`, `UIImage imageNamed:`) -- these define what `BUNDLE_PATH` must serve.
+- [ ] Detect middleware (OpenAL, FMOD, libpng, zlib, Flurry/analytics) and decide stub vs. implementation. Analytics/ads/StoreKit = stub.
+
+### Phase 4: Loader and ObjC bootstrap (GATE: log reaches the app delegate)
+- [ ] `macho_load()` maps `__TEXT`/`__DATA` at `0x98000000`, applies `rebase.bin`, binds `__nl_symbol_ptr`/`__la_symbol_ptr`.
+- [ ] Every import in `imports.txt` resolves to a shim or `ml_unimpl_entry`; `[UNIMPL]` lines in the log are the to-do list.
+- [ ] `macho_run_inits()` runs `__mod_init_func` (C++ static constructors) without crashing.
+- [ ] ObjC: register the game's classes from `__objc_classlist`, implement `alloc/init/retain/release/autorelease`, `NSString`, `NSArray`, `NSDictionary`, `NSUserDefaults` (backed by `saves/`), `NSBundle mainBundle resourcePath`.
+- [ ] Call the delegate's `applicationDidFinishLaunching:` (or `application:didFinishLaunchingWithOptions:`) via `call_guest`. Log `[BOOT] delegate ok`.
+
+### Phase 5: Graphics (GATE: first frame on screen)
+- [ ] vitaGL init (`vglInitExtended`) at 960x544, SoftFP build; `EAGLContext`/`CAEAGLLayer`/`renderbufferStorage:fromDrawable:` shims backed by the virtual FBO (`source/gles.c`).
+- [ ] Orientation: rotate/scale the virtual FBO for portrait games (320x480 / 640x960 / 768x1024) to 960x544 with correct aspect.
+- [ ] `presentRenderbuffer:` → `vglSwapBuffers`; drive the game's draw selector from the main loop at its native rate.
+- [ ] Textures: CgBI PNG via `source/cgbi.c` (`tools/cgbi_check.py` to verify), PVRTC via vitaGL; `GL_FIXED` vertex arrays converted.
+- [ ] GLES2 games: GLSL shaders → `psvita-toolkit shader-transpile` / `shader-live-reload`.
+
+### Phase 6: Touch
+- [ ] Front touch → `UITouch` objects with `locationInView:` in the game's logical coordinates (undo the FBO rotation/scale).
+- [ ] Deliver `touchesBegan/Moved/Ended:withEvent:` to the view that the game registered; multitouch if `multipleTouchEnabled`.
+- [ ] Rear panel disabled or mapped (see Phase 7).
+
+### Phase 7: Physical controls
+- [ ] Default mapping: D-pad/stick/✕○□△/L/R/START/SELECT → synthesized touches on the on-screen buttons (`source/input.c` touch layer) or direct calls into the game's input functions when found in `symbols.txt`.
+- [ ] Analog deadzone (~8-12) and sensitivity with sane defaults.
+- [ ] Remappable `controls.txt` in `ux0:data/{slug}/` (`VITA_BUTTON = GAME_ACTION`); missing file = defaults.
+
+### Phase 8: Audio
+- [ ] AudioUnit RemoteIO / AudioQueue / OpenAL / `AVAudioPlayer` (whichever `frameworks.txt` shows) → `sceAudioOut` thread (`source/coreaudio.c`).
+- [ ] Music (often `.caf`/`.m4a`/`.mp3`) decodes; convert offline with a script if no decoder fits.
+- [ ] No crackle/drift; pause on suspend; volume settings respected.
+
+### Phase 9: Videos / FMV
+- [ ] Inventory `.m4v`/`.mp4` in the bundle; `MPMoviePlayerController` shim → `sceAvPlayer`.
+- [ ] Button skip and graceful skip when the video is missing (never hang on black screen).
+
+### Phase 10: Assets, data, language and saves
+- [ ] `NSHomeDirectory()`/`Documents`/`Library/Caches` → `ux0:data/{slug}/saves/`; bundle reads → `game_app/`.
+- [ ] Boot checker: if `game_app/{exec_name}` or `rebase.bin` is missing, show a dialog with the exact path.
+- [ ] `NSLocale preferredLanguages` / `AppleLanguages` → Vita system language (`sceAppUtilSystemParamGetById`), English fallback.
+- [ ] Saves survive restart and suspend.
+
+### Phase 11: Performance
+- [ ] 444/222/222/166 clocks at boot (already in `main.c`); optional PSVshell note in README.
+- [ ] Stable frame time (`psvita-toolkit perf-telemetry`), memory under control (`psvita-toolkit mem-profile`), long session without leaks.
+
+### Phase 12: Configurator and options
+- [ ] Persistent settings in `saves/` (deadzones, sensitivity, FPS lock, filter, touch overlay).
+
+### Phase 13: Trophies
+- [ ] Map GameKit achievements (if `GameKit` is linked, grep `reportAchievement`/`GKAchievement`) to `sceNpTrophy` unlocks; otherwise a short achievable list.
+
+### Phase 14: LiveArea and VPK
+- [ ] `icon0.png` 128x128, `bg.png` 840x500, `startup.png` 280x158 (8-bit indexed) -- `psvita-toolkit livearea --validate`.
+- [ ] `param.sfo` with Title ID `{ctx['titleid']}`; VPK installs without warnings.
+
+### Phase 15: Real-hardware testing and release
+- [ ] Full playthrough without crashes; suspend/resume OK; Vita 1000/2000/PSTV status stated.
+- [ ] Production build: `PORT_TRACE=OFF` or `psvita-toolkit log-trace --remove`.
+- [ ] README states the exact IPA version tested and that the user must supply a **decrypted** IPA.
+
+## 6. Crash triage loop
+
+1. Stage and deploy data: `tools/stage_data.sh` then `psvita-toolkit deploy --data` (or `python3 -I tools/deploy_data.py`).
+2. Pull logs: `python3 -I tools/deploy_data.py --logs` → newest `logs/{slug}_NNN.log`.
+3. Dump: `psvita-toolkit analyze <dump>.psp2dmp --elf build/{ctx['project_name']}`.
+4. PC in `0x98xxxxxx` → game code: subtract `0x98000000`, find the function in `decompiled/macho/symbols.txt`, then `python3 -I tools/annotate.py game_app/{exec_name} '<symbol>'` and the Ghidra pseudo-C.
+5. PC in the loader → it's our shim: check the ABI rules (section 4) first.
+
+## 7. On-console log standard
+
+The game log lives at `ux0:data/{slug}/logs/{slug}_NNN.log` -- concretely `{slug}_001.log`,
+`{slug}_002.log`, ... up to `{slug}_999.log`, then wraps to 001. Never `log_NNN.log`, never
+`log_<timestamp>.txt`, never 000-based, never a hardcoded path: build it from `LOGS_PATH`
+(`source/hle.h`). Use the levels `l_info` / `l_warn` / `l_error` / `l_fatal` and tag subsystems
+(`[MACHO]`, `[OBJC]`, `[GL]`, `[AUDIO]`, `[INPUT]`, `[UNIMPL]`) so logs can be grepped.
+Toolkit: `psvita-toolkit log-standard --fix-dirs`, `psvita-toolkit log-trace --ensure-flag`.
 """
     (new_dir / "PORTING_PLAN.md").write_text(plan)
     print(f"{C.GREEN}[+] Plan de port iOS (PORTING_PLAN.md) escrito.{C.RESET}")
@@ -2381,6 +2644,9 @@ def complete_port_ios(project_dir, global_cfg, meta, skip_ghidra=False):
 
     if not cmake_path.exists() or not (project_dir / "source" / "macho.c").exists():
         setup_repo_dir_ios(global_cfg, ctx)
+
+    if not (project_dir / "decompiled" / "macho").is_dir():
+        _record_macho_decompile(ctx, decompile_macho(project_dir, skip_ghidra=skip_ghidra))
 
     if cmake_path.exists():
         text = cmake_path.read_text(errors="ignore")
@@ -2923,6 +3189,7 @@ def run_wizard(global_cfg):
             tui.print_banner(t("init_port.creating_port_title", game_name=ctx['game_name']))
             setup_repo_dir_ios(global_cfg, ctx)
             place_ipa_and_detect(ctx)
+            _record_macho_decompile(ctx, decompile_macho(ctx["new_dir"], skip_ghidra=ctx.get("skip_ghidra", False)))
             git_init_and_ignore(ctx)
             write_plan_and_progress_ios(ctx)
             write_claude_md_and_skills(global_cfg, ctx)
@@ -3028,6 +3295,7 @@ def run_wizard_headless(global_cfg, apk_path=None, ipa_path=None, game_name=None
         print(f"\n{C.BOLD}{t('init_port.creating_port_title', game_name=ctx['game_name'])} [iOS]{C.RESET}")
         setup_repo_dir_ios(global_cfg, ctx)
         place_ipa_and_detect(ctx)
+        _record_macho_decompile(ctx, decompile_macho(ctx["new_dir"], skip_ghidra=skip_ghidra))
         git_init_and_ignore(ctx)
         write_plan_and_progress_ios(ctx)
         write_claude_md_and_skills(global_cfg, ctx)

@@ -357,6 +357,11 @@ def decompile_all(project_cfg, global_cfg):
     @note Reuses the extraction already present in `<slug>_extract/`, if any.
     """
     project_dir = Path(project_cfg["_project_dir"])
+    from .init_port import decompile_macho, detect_project_platform
+    if detect_project_platform(project_dir, project_cfg) == "ios":
+        # IPA: no APK/.so -- the only native code is the Mach-O executable
+        decompile_macho(project_dir)
+        return
     slug = project_cfg["slug"]
     apk_basename = project_cfg.get("apk_basename", "")
 

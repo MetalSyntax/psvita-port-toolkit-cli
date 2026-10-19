@@ -307,6 +307,9 @@ def load_project_config(project_dir):
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
             data["_project_dir"] = str(project_dir)
+            # Older iOS configs pointed the logs at the data root instead of logs/.
+            if data.get("slug") and data.get("vita_logs_dir") == f"/ux0:/data/{data['slug']}":
+                data["vita_logs_dir"] += "/logs"
             return data
     except (json.JSONDecodeError, OSError):
         return None
@@ -356,7 +359,7 @@ def new_project_config(
         "build_dir": build_dir,
         "vita_downloads_dir": "/ux0:/downloads",
         "vita_data_dir": "/ux0:/data",
-        "vita_logs_dir": f"/ux0:/data/{slug}/logs" if platform == "android" else f"/ux0:/data/{slug}",
+        "vita_logs_dir": f"/ux0:/data/{slug}/logs",
         "vita_cg_dir": f"ux0:/data/{slug}/cg",
         "vita_glsl_dir": f"ux0:/data/{slug}/glsl",
         "vita_game_data_dir": f"/ux0:/data/{slug}",

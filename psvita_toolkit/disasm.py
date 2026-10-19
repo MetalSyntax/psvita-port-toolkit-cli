@@ -33,9 +33,9 @@ from .context_feeder import copy_to_clipboard
 
 STRINGS = {
     "disasm.so_not_found": {
-        "es": "[-] No se encontró ningún .so en el proyecto -- pasa --so con la ruta exacta.",
-        "en": "[-] No .so found under the project -- pass --so with the exact path.",
-        "pt": "[-] Nenhum .so encontrado no projeto -- passe --so com o caminho exato.",
+        "es": "[-] No se encontró ningún .so en el proyecto -- pasa --so con la ruta exacta. Si es un port iOS (IPA) no hay .so: usa `python3 -I tools/annotate.py game_app/<ejecutable> <símbolo>`.",
+        "en": "[-] No .so found under the project -- pass --so with the exact path. iOS (IPA) ports have no .so: use `python3 -I tools/annotate.py game_app/<executable> <symbol>`.",
+        "pt": "[-] Nenhum .so encontrado no projeto -- passe --so com o caminho exato. Ports iOS (IPA) não têm .so: use `python3 -I tools/annotate.py game_app/<executável> <símbolo>`.",
     },
     "disasm.nm_missing": {
         "es": "[-] 'arm-vita-eabi-nm' no está en el PATH -- corré `psvita-toolkit doctor` para diagnosticar el toolchain de VITASDK.",
