@@ -221,6 +221,7 @@ def _adopt_project(project_dir):
     project_cfg = cfgmod.new_project_config(
         game_name=game_name, slug=slug, project_name=project_name,
         titleid=titleid, vita_ip=vita_ip, vita_port=vita_port,
+        platform=guess.get("platform", "android"),
     )
     cfgmod.save_project_config(project_dir, project_cfg)
     print(f"\n{C.GREEN}{t('project.adopt_saved', path=project_dir)}{C.RESET}")
@@ -276,6 +277,11 @@ def _open_project(project_dir):
     cfg = cfgmod.load_project_config(project_dir)
     if cfg is None:
         cfg = _adopt_project(project_dir)
+    else:
+        if "platform" not in cfg:
+            platform = init_port.detect_project_platform(project_dir, cfg)
+            cfg["platform"] = platform
+            cfgmod.save_project_config(project_dir, cfg)
     audit = init_port.check_port_completeness(project_dir)
     if audit["is_incomplete"]:
         print(f"\n{C.YELLOW}[!] El port tiene elementos incompletos ({len(audit['missing'])} faltantes):{C.RESET}")

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from . import i18n
+from . import cgbi, i18n
 from .i18n import t
 from . import tui
 from .tui import C
@@ -443,6 +443,7 @@ def process_asset(input_path, asset_type, output_dir, mode="crop", dither=True, 
 
     print(f"\n{t('livearea.processing', bold=C.BOLD, reset=C.RESET, cyan=C.CYAN, input_name=Path(input_path).name, green=C.GREEN, filename=spec['filename'], spec_name=t(spec['name']))}")
 
+    input_path = cgbi.normalize(input_path)  # PNG de un IPA (CgBI): Pillow no los lee
     with Image.open(input_path) as src:
         print(f"  {t('livearea.input_dims', dim=C.DIM, reset=C.RESET, width=src.size[0], height=src.size[1], mode=src.mode)}")
         resized = _resize(src, spec["width"], spec["height"], mode=mode)
@@ -821,6 +822,7 @@ def _asset_flow(asset_type, dest_dir):
     if not raw:
         return
     try:
+        raw = cgbi.normalize(raw)  # PNG de un IPA (CgBI): Pillow ni el upscaler los leen
         with Image.open(raw) as test_img:
             print(f"  {C.GREEN}{t('livearea.image_loaded', width=test_img.size[0], height=test_img.size[1], format=test_img.format, mode=test_img.mode)}{C.RESET}")
             img_w, img_h = test_img.size

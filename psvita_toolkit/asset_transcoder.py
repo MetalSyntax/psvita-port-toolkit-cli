@@ -40,7 +40,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import i18n
+from . import cgbi, i18n
 from . import livearea
 from . import tui
 from .i18n import t
@@ -256,7 +256,7 @@ def transcode_texture(src_path, dest_dir):
     """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    img = Image.open(src_path).convert("RGBA")
+    img = Image.open(cgbi.normalize(src_path)).convert("RGBA")
     levels = _mip_chain(img)
     out_path = dest_dir / f"{Path(src_path).stem}.rawtex"
     raw_size = _write_rawtex(levels, out_path)
