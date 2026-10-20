@@ -156,6 +156,11 @@ STRINGS = {
         "en": "Upload full VPK to ux0:downloads/ (install from VitaShell)",
         "pt": "Enviar o VPK completo para ux0:downloads/ (instalar pelo VitaShell)",
     },
+    "build_deploy.deploy_psvita_opt_rebase": {
+        "es": "Subir SOLO rebase.bin a ux0:data/<slug>/ (port IPA)",
+        "en": "Upload ONLY rebase.bin to ux0:data/<slug>/ (IPA port)",
+        "pt": "Enviar SOMENTE o rebase.bin para ux0:data/<slug>/ (port IPA)",
+    },
     "build_deploy.deploy_psvita_opt3": {
         "es": "Omitir",
         "en": "Skip",
@@ -656,12 +661,16 @@ def _deploy_psvita(project_cfg, global_cfg, vpk_path):
         ("vpk", t("build_deploy.deploy_psvita_opt2")),
         ("skip", t("build_deploy.deploy_psvita_opt3")),
     ]
+    if project_cfg.get("platform") == "ios":
+        options.insert(2, ("rebase", t("build_deploy.deploy_psvita_opt_rebase")))
     chosen = tui.select_list(t("build_deploy.deploy_psvita_title"), options, label_fn=lambda o: o[1])
     action = chosen[0] if chosen else "skip"
     if action == "eboot":
         ftp_ops.upload_eboot(project_cfg, global_cfg)
     elif action == "vpk":
         ftp_ops.upload_vpk(project_cfg, global_cfg)
+    elif action == "rebase":
+        ftp_ops.upload_rebase(project_cfg, global_cfg)
     else:
         print(t("build_deploy.psvita_upload_skipped"))
 

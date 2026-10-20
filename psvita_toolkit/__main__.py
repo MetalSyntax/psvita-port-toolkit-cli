@@ -320,6 +320,11 @@ STRINGS = {
         "en": "Upload the full VPK to the PS Vita (ux0:downloads/)",
         "pt": "Enviar o VPK completo para a PS Vita (ux0:downloads/)",
     },
+    "main.menu.upload_rebase": {
+        "es": "Subir SOLO rebase.bin a la PS Vita (ux0:data/<slug>/, port IPA)",
+        "en": "Upload ONLY rebase.bin to the PS Vita (ux0:data/<slug>/, IPA port)",
+        "pt": "Enviar SOMENTE o rebase.bin para a PS Vita (ux0:data/<slug>/, port IPA)",
+    },
     "main.menu.upload_ux0data": {
         "es": "Subir ux0_data/<slug> completa a la PS Vita (ux0:data/<slug>/)",
         "en": "Upload the full ux0_data/<slug> folder to the PS Vita (ux0:data/<slug>/)",
@@ -529,6 +534,10 @@ def show_project_menu(project_cfg, global_cfg):
          lambda: build_deploy.build_and_deploy_wizard(project_cfg, global_cfg)),
         (t("main.menu.upload_eboot"), lambda: ftp_ops.upload_eboot(project_cfg, global_cfg)),
         (t("main.menu.upload_vpk"), lambda: ftp_ops.upload_vpk(project_cfg, global_cfg)),
+    ]
+    if project_cfg.get("platform") == "ios":
+        items.append((t("main.menu.upload_rebase"), lambda: ftp_ops.upload_rebase(project_cfg, global_cfg)))
+    items += [
         (t("main.menu.upload_ux0data"), lambda: ftp_ops.upload_ux0_data_dir(project_cfg, global_cfg)),
         (t("main.menu.download_logs"),
          lambda: ftp_ops.download_logs_and_dumps(project_cfg, global_cfg)),
