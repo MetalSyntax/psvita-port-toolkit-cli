@@ -252,6 +252,16 @@ def build_parser():
     p_transcode.add_argument("--gen-loader", action="store_true",
                               help="Also generate rawtex_loader.c/.h (real C to load .rawtex via sceGxmTextureInitLinear).")
 
+    p_media = sub.add_parser("media", help="Integrate video/audio: scan with ffprobe, convert with ffmpeg, copy proven playback code from a sibling port.")
+    p_media.add_argument("action", choices=("scan", "convert", "integrate", "recipes"))
+    p_media.add_argument("recipe", nargs="?", help="Recipe key for 'integrate' (see 'media recipes').")
+    p_media.add_argument("--project", help="Path to the port directory (default: current directory).")
+    p_media.add_argument("--media-dir", help="Folder to scan/convert (default: the whole project).")
+    p_media.add_argument("--out-dir", help="Converted output (default: <project>/extras/media).")
+    p_media.add_argument("--audio-format", choices=("ogg", "wav"), default="ogg", help="Audio target for 'convert' (48 kHz stereo).")
+    p_media.add_argument("--all", action="store_true", help="'convert' every file, not only the ones that need it.")
+    p_media.add_argument("--ref-root", help="Folder holding the reference ports (default: the project's parent).")
+
     p_perf = sub.add_parser("perf-telemetry", help="Listen for live frame-pacing/core telemetry from the real console, or generate the C-side hooks.")
     p_perf.add_argument("--project", help="Path to the port directory (default: current directory).")
     p_perf.add_argument("--port", type=int, help="UDP port to listen on (default: 9996).")
@@ -887,6 +897,30 @@ def _cmd_transcode_assets(args):
     return 0
 
 
+def _cmd_media(args):
+    """!
+    @brief `media` subcommand handler: scan / convert / integrate / recipes.
+    @param args Parsed CLI args (`action`, `recipe`, `project`, `media_dir`, `out_dir`, `audio_format`, `all`, `ref_root`).
+    @return `1` on missing project, failed conversions or a failed integrate, else `0`.
+    """
+    from . import media
+    if args.action == "recipes":
+        media.print_recipes()
+        return 0
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    if args.action == "scan":
+        media.scan(project_cfg, args.media_dir)
+        return 0
+    if args.action == "convert":
+        _ok, failed = media.convert(project_cfg, args.media_dir, args.out_dir, args.audio_format, args.all)
+        return 1 if failed else 0
+    if not args.recipe:
+        return _fail("media integrate requires a recipe (see 'psvita-toolkit media recipes').")
+    return 0 if media.integrate(project_cfg, args.recipe, args.ref_root) is not None else 1
+
+
 def _cmd_perf_telemetry(args):
     """!
     @brief `perf-telemetry` subcommand handler: run the UDP telemetry listener
@@ -1066,6 +1100,7 @@ _HANDLERS = {
     "web": _cmd_web,
     "gdb-map": _cmd_gdb_map,
     "transcode-assets": _cmd_transcode_assets,
+    "media": _cmd_media,
     "perf-telemetry": _cmd_perf_telemetry,
     "soak-test": _cmd_soak_test,
     "auto-bootstrap": _cmd_auto_bootstrap,

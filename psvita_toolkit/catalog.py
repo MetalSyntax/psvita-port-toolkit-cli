@@ -259,6 +259,11 @@ CATALOG = [
                 "en": "Textures into a self-documented container with precomputed mipmaps (plus real GPU compression if PVRTexToolCLI is present), audio to .at9 in bulk, and the C code that actually loads them.",
                 "pt": "Texturas para um contêiner próprio com mipmaps pré-calculados (mais compressão GPU real se houver PVRTexToolCLI), áudio para .at9 em lote, e o código C que efetivamente os carrega.",
             }},
+            {"name": "media", "tags": [_GEN_C, _OPTIONAL], "desc": {
+                "es": "Video y audio para cualquier port: ffprobe clasifica cada archivo, ffmpeg convierte lo que la Vita no reproduce (H.264 Baseline / OGG-WAV 48 kHz) y copia el reproductor/mixer ya probado del port que resolvió ese mismo formato.",
+                "en": "Video and audio for any port: ffprobe classifies each file, ffmpeg converts what the Vita can't play (H.264 Baseline / OGG-WAV 48 kHz), and it copies the proven player/mixer from the port that already solved that format.",
+                "pt": "Vídeo e áudio para qualquer port: ffprobe classifica cada arquivo, ffmpeg converte o que a Vita não reproduz (H.264 Baseline / OGG-WAV 48 kHz) e copia o player/mixer já comprovado do port que resolveu esse formato.",
+            }},
             {"name": "web", "tags": [_REAL_CONSOLE], "desc": {
                 "es": "Dashboard local en el navegador: logs en vivo, estado de la consola, crash dumps, assets de LiveArea, mapeador visual Touch-to-Pad, y el gráfico de rendimiento -- todo en una pestaña.",
                 "en": "Local browser dashboard: live logs, console status, crash dumps, LiveArea assets, the visual Touch-to-Pad mapper, and the performance graph -- all in one tab.",

@@ -45,6 +45,7 @@ from . import tui
 from . import utils
 from . import zenonia2_tools
 from . import ai_tracker
+from . import media
 from .i18n import t
 from .tui import C
 
@@ -228,6 +229,11 @@ STRINGS = {
         "es": "Transcodificador de Assets Nativos (texturas .rawtex + audio .at9 en lote)",
         "en": "Native Asset Transcoder (batch .rawtex textures + .at9 audio)",
         "pt": "Transcodificador de Assets Nativos (texturas .rawtex + áudio .at9 em lote)",
+    },
+    "main.utils.media": {
+        "es": "Integrar Video y Audio (ffprobe/ffmpeg + código probado de otros ports)",
+        "en": "Integrate Video and Audio (ffprobe/ffmpeg + proven code from other ports)",
+        "pt": "Integrar Vídeo e Áudio (ffprobe/ffmpeg + código comprovado de outros ports)",
     },
     "main.utils.export_context": {
         "es": "Exportar contexto de crash para Copiloto IA (Claude/Gemini/LLMs)",
@@ -444,6 +450,7 @@ def _utils_submenu(project_cfg, global_cfg):
         (t("main.utils.disasm"), lambda: disasm.disasm_menu(project_cfg, global_cfg)),
         (t("main.utils.gdb_bridge"), lambda: gdb_bridge.gdb_bridge_menu(project_cfg, global_cfg)),
         (t("main.utils.asset_transcoder"), lambda: asset_transcoder.transcoder_menu(project_cfg, global_cfg)),
+        (t("main.utils.media"), lambda: media.media_menu(project_cfg, global_cfg)),
         (t("main.utils.export_context"), lambda: context_feeder.export_context_menu(project_cfg, global_cfg)),
         (t("main.utils.clean_macos_junk"), lambda: utils.clean_macos_junk(project_cfg["_project_dir"])),
         (t("main.utils.decompile_all"), lambda: utils.decompile_all(project_cfg, global_cfg)),
