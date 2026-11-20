@@ -111,10 +111,20 @@ STRINGS = {
         "en": "Enter back to menu · R run this option again",
         "pt": "Enter voltar ao menu · R repetir esta opção",
     },
+    "tui.after_action_with_ip": {
+        "es": "Enter volver al menú · R repetir esta opción · I IP temporal",
+        "en": "Enter back to menu · R run this option again · I temp IP",
+        "pt": "Enter voltar ao menu · R repetir esta opção · I IP temporário",
+    },
     "tui.after_action_failed": {
         "es": "La opción falló -- R reintentar · Enter volver al menú",
         "en": "The option failed -- R retry · Enter back to menu",
         "pt": "A opção falhou -- R tentar de novo · Enter voltar ao menu",
+    },
+    "tui.after_action_failed_with_ip": {
+        "es": "La opción falló -- R reintentar · Enter volver al menú · I IP temporal",
+        "en": "The option failed -- R retry · Enter back to menu · I temp IP",
+        "pt": "A opção falhou -- R tentar de novo · Enter voltar ao menu · I IP temporário",
     },
 }
 i18n.register(STRINGS)
@@ -227,6 +237,21 @@ def pause(msg=None):
         pass
 
 
+_temp_ip_handler = None
+
+
+def set_temp_ip_handler(handler):
+    """!
+    @brief Register a callable to prompt and set a temporary IP in the active project.
+    """
+    global _temp_ip_handler
+    _temp_ip_handler = handler
+
+
+def get_temp_ip_handler():
+    return _temp_ip_handler
+
+
 def _after_action_prompt(failed=False):
     """!
     @brief Post-action pause that also offers re-running the same option.
@@ -240,7 +265,10 @@ def _after_action_prompt(failed=False):
     if not sys.stdin.isatty():
         pause()
         return False
-    key = "tui.after_action_failed" if failed else "tui.after_action"
+    if failed:
+        key = "tui.after_action_failed_with_ip" if _temp_ip_handler else "tui.after_action_failed"
+    else:
+        key = "tui.after_action_with_ip" if _temp_ip_handler else "tui.after_action"
     color = C.YELLOW if failed else C.BOLD
     print(f"\n{C.DIM}[ {C.RESET}{color}{t(key)}{C.RESET}{C.DIM} ]{C.RESET}")
     while True:
@@ -250,6 +278,12 @@ def _after_action_prompt(failed=False):
             return False
         if c in ("r", "R"):
             return True
+        if c in ("i", "I", "c", "C"):
+            if _temp_ip_handler and _temp_ip_handler():
+                return True
+            # Re-display prompt if IP prompt was cancelled
+            print(f"\n{C.DIM}[ {C.RESET}{color}{t(key)}{C.RESET}{C.DIM} ]{C.RESET}")
+            continue
         if c in ("m", "M"):
             raise GoToMainMenu()
         if c in ("\r", "\n", "\x03", "\x1b", "0", "q", "Q", " "):

@@ -409,7 +409,8 @@ def _status_header(project_cfg):
             else t("main.status.vpk_none")
         )
         print(f"{C.DIM}{t('main.status.dir_line', project_dir=project_dir)}{C.RESET}")
-        print(f"{C.DIM}{t('main.status.info_line', titleid=project_cfg['titleid'], vita_ip=project_cfg['vita_ip'], vita_port=project_cfg.get('vita_port', 1337), vpk_info=vpk_info)}{C.RESET}")
+        ip_display = f"{project_cfg['vita_ip']} (temporal)" if project_cfg.get("_temp_ip") else project_cfg['vita_ip']
+        print(f"{C.DIM}{t('main.status.info_line', titleid=project_cfg['titleid'], vita_ip=ip_display, vita_port=project_cfg.get('vita_port', 1337), vpk_info=vpk_info)}{C.RESET}")
     return render
 
 
@@ -561,20 +562,24 @@ def show_project_menu(project_cfg, global_cfg):
         (f"{C.RED}{t('main.menu.exit')}{C.RESET}", _raise_exit_app),
     ]
 
-    while True:
-        try:
-            tui.run_menu(
-                f"{project_cfg['game_name']}",
-                items,
-                breadcrumb=project_cfg["game_name"],
-                subtitle=t("main.menu.subtitle"),
-                header_extra=_status_header(project_cfg),
-            )
-            # 0/Q on the main menu: the only place left to go back to is the
-            # project selector.
-            raise tui.SwitchProject()
-        except tui.GoToMainMenu:
-            continue
+    tui.set_temp_ip_handler(lambda: ftp_ops.prompt_temp_ip(project_cfg))
+    try:
+        while True:
+            try:
+                tui.run_menu(
+                    f"{project_cfg['game_name']}",
+                    items,
+                    breadcrumb=project_cfg["game_name"],
+                    subtitle=t("main.menu.subtitle"),
+                    header_extra=_status_header(project_cfg),
+                )
+                # 0/Q on the main menu: the only place left to go back to is the
+                # project selector.
+                raise tui.SwitchProject()
+            except tui.GoToMainMenu:
+                continue
+    finally:
+        tui.set_temp_ip_handler(None)
 
 
 def main():

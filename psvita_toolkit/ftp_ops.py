@@ -15,6 +15,7 @@ the VPN bypass, the shallow (non-recursive) asset comparison, and the three log/
 download modes.
 """
 
+import os
 import re
 import socket
 import subprocess
@@ -60,6 +61,26 @@ STRINGS = {
         "es": "[!] Falló la conexión -- reintentando ({attempt}/{retries})...",
         "en": "[!] Connection failed -- retrying ({attempt}/{retries})...",
         "pt": "[!] Falha na conexão -- tentando novamente ({attempt}/{retries})...",
+    },
+    "ftp_ops.connect_failed_prompt": {
+        "es": "Enter volver al menú · R reintentar · I cambiar IP temporal",
+        "en": "Enter back to menu · R retry · I temporary IP",
+        "pt": "Enter voltar ao menu · R tentar de novo · I IP temporário",
+    },
+    "ftp_ops.temp_ip_prompt": {
+        "es": "IP temporal de la PS Vita [{current}]:",
+        "en": "Temporary PS Vita IP [{current}]:",
+        "pt": "IP temporário do PS Vita [{current}]:",
+    },
+    "ftp_ops.temp_ip_set": {
+        "es": "[+] Usando IP temporal para esta sesión: {ip}:{port}",
+        "en": "[+] Using temporary IP for this session: {ip}:{port}",
+        "pt": "[+] Usando IP temporário para esta sessão: {ip}:{port}",
+    },
+    "ftp_ops.console_set_temp_ip": {
+        "es": "Establecer IP temporal para esta sesión",
+        "en": "Set temporary IP for this session",
+        "pt": "Definir IP temporário para esta sessão",
     },
     "ftp_ops.console_menu_title": {
         "es": "Perfiles de consola",
@@ -619,6 +640,39 @@ def _local_ip_for_route(vita_ip):
         return None
 
 
+def prompt_temp_ip(project_cfg):
+    """!
+    @brief Prompt the user interactively for a temporary PS Vita IP address (and optional port).
+    @param project_cfg Active project config dict (mutated in place).
+    @return True if a new temporary IP was set, False if cancelled / blank.
+    """
+    current_ip = project_cfg.get("vita_ip", "192.168.1.100")
+    current_port = project_cfg.get("vita_port", 1337)
+    print()
+    try:
+        prompt_text = t("ftp_ops.temp_ip_prompt", current=f"{current_ip}:{current_port}")
+        raw = input(f"{C.BOLD}{prompt_text}{C.RESET} ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    if not raw:
+        return False
+    if ":" in raw:
+        parts = raw.split(":", 1)
+        ip = parts[0].strip()
+        port = int(parts[1].strip()) if parts[1].strip().isdigit() else current_port
+    else:
+        ip = raw
+        port = current_port
+    if not ip:
+        return False
+    project_cfg["vita_ip"] = ip
+    project_cfg["vita_port"] = port
+    project_cfg["_temp_ip"] = True
+    print(f"{C.GREEN}{t('ftp_ops.temp_ip_set', ip=ip, port=port)}{C.RESET}")
+    return True
+
+
 def connect_ftp(project_cfg, global_cfg=None):
     """!
     @brief Open an FTP connection to the project's configured test PS Vita.
@@ -626,8 +680,10 @@ def connect_ftp(project_cfg, global_cfg=None):
     @param global_cfg Unused by this function; kept for call-site symmetry with `_connect()`.
     @return An anonymous, logged-in `ftplib.FTP` instance, or `None` on failure.
     """
-    vita_ip = project_cfg["vita_ip"]
-    vita_port = project_cfg.get("vita_port", 1337)
+    env_ip = os.environ.get("PSVITA_IP") or os.environ.get("VITA_IP")
+    vita_ip = env_ip or project_cfg["vita_ip"]
+    env_port = os.environ.get("PSVITA_PORT") or os.environ.get("VITA_PORT")
+    vita_port = int(env_port) if env_port and env_port.isdigit() else project_cfg.get("vita_port", 1337)
     print(t("ftp_ops.connecting", ip=vita_ip, port=vita_port))
     local_ip = _local_ip_for_route(vita_ip)
     source_addr = (local_ip, 0) if local_ip else None
@@ -658,7 +714,7 @@ def _connect(project_cfg, global_cfg):
 
 def _connect_with_retry(project_cfg, global_cfg, retries=2, delay=2.0):
     """!
-    @brief `_connect()`, retrying a couple of times on failure before giving up.
+    @brief `_connect()`, retrying a couple of times on failure before offering interactive options.
     @param project_cfg Active project config dict.
     @param global_cfg Global config dict.
     @param retries Extra connection attempts after the first one fails.
@@ -676,6 +732,23 @@ def _connect_with_retry(project_cfg, global_cfg, retries=2, delay=2.0):
         print(t("ftp_ops.retry_connect", attempt=attempt, retries=retries))
         time.sleep(delay)
         ftp = _connect(project_cfg, global_cfg)
+
+    while ftp is None and sys.stdin.isatty():
+        print(f"\n{C.DIM}[ {C.RESET}{C.YELLOW}{t('ftp_ops.connect_failed_prompt')}{C.RESET}{C.DIM} ]{C.RESET}")
+        try:
+            c = tui.getch()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if c in ("r", "R"):
+            ftp = _connect(project_cfg, global_cfg)
+        elif c in ("i", "I", "c", "C"):
+            if prompt_temp_ip(project_cfg):
+                ftp = _connect(project_cfg, global_cfg)
+        elif c in ("m", "M"):
+            raise tui.GoToMainMenu()
+        elif c in ("\r", "\n", "\x03", "\x1b", "0", "q", "Q", " "):
+            return None
+
     return ftp
 
 
@@ -1972,7 +2045,8 @@ def console_profiles_menu(project_cfg):
     def header():
         active_ip = project_cfg.get("vita_ip")
         active_port = project_cfg.get("vita_port")
-        print(f"{C.BOLD}{t('ftp_ops.console_active', ip=active_ip, port=active_port)}{C.RESET}\n")
+        suffix = f" {C.YELLOW}(temporal){C.RESET}" if project_cfg.get("_temp_ip") else ""
+        print(f"{C.BOLD}{t('ftp_ops.console_active', ip=active_ip, port=active_port)}{suffix}{C.RESET}\n")
         profiles = list_console_profiles(project_cfg)
         if not profiles:
             print(t("ftp_ops.console_none_saved"))
@@ -2006,6 +2080,7 @@ def console_profiles_menu(project_cfg):
     def do_switch():
         name = _pick_profile_name()
         if name and switch_console_profile(project_cfg, name):
+            project_cfg.pop("_temp_ip", None)
             print(f"{C.GREEN}{t('ftp_ops.console_switched', name=name)}{C.RESET}")
 
     def do_delete():
@@ -2014,6 +2089,7 @@ def console_profiles_menu(project_cfg):
             print(f"{C.GREEN}{t('ftp_ops.console_deleted', name=name)}{C.RESET}")
 
     items = [
+        (t("ftp_ops.console_set_temp_ip"), lambda: prompt_temp_ip(project_cfg)),
         (t("ftp_ops.console_add"), do_add),
         (t("ftp_ops.console_switch"), do_switch),
         (t("ftp_ops.console_delete"), do_delete),
