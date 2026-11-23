@@ -188,6 +188,9 @@ def build_parser():
     p_ctx.add_argument("--copy", action="store_true", help="Copy the generated prompt directly to system clipboard.")
     p_ctx.add_argument("--max-chars", type=int, default=14000, help="Character budget limit for token optimization (default: 14000).")
 
+    p_decomp = sub.add_parser("decompile", help="Re-run the full decompilation of the project's native code (jadx + Ghidra for .so; otool/nm dumps + Ghidra for an iOS Mach-O).")
+    p_decomp.add_argument("--project", help="Path to the port directory (default: current directory).")
+
     p_disasm = sub.add_parser("disasm", help="Disassemble a function/address from the .so (cross-referenced against Ghidra) into a file ready for an AI assistant.")
     p_disasm.add_argument("query", nargs="?", default=None,
                            help="Symbol name (mangled or demangled), Ghidra 'FUN_<hex>' label, or raw hex address (e.g. 0xcc128). "
@@ -561,7 +564,7 @@ def _cmd_livearea(args):
     if err:
         return _fail(err)
     i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
-    dest_dir = Path(project_cfg["_project_dir"]) / "extras" / "livearea"
+    dest_dir = Path(project_cfg["_project_dir"]) / project_cfg.get("livearea_dir", "extras/livearea")
 
     if not any([args.auto, args.template, args.bgm, args.validate]):
         return _fail("livearea (headless) requires at least one of --auto/--template/--bgm/--validate "
@@ -680,6 +683,23 @@ def _cmd_export_context(args):
     )
 
 
+
+
+def _cmd_decompile(args):
+    """!
+    @brief `decompile` subcommand handler: `utils.decompile_all()` for the project.
+    @return `1` on missing config/project, else `0`.
+    """
+    from .utils import decompile_all
+    global_cfg, err = _load_global_config()
+    if err:
+        return _fail(err)
+    project_cfg, err = _load_project(args.project)
+    if err:
+        return _fail(err)
+    i18n.set_language(global_cfg.get("language", i18n.DEFAULT_LANGUAGE))
+    decompile_all(project_cfg, global_cfg)
+    return 0
 
 
 def _cmd_disasm(args):
@@ -1091,6 +1111,7 @@ _HANDLERS = {
     "jni-analyze": _cmd_jni_analyze,
     "logs-live": _cmd_logs_live,
     "export-context": _cmd_export_context,
+    "decompile": _cmd_decompile,
     "disasm": _cmd_disasm,
     "so-patch": _cmd_so_patch,
     "sync-shared": _cmd_sync_shared,

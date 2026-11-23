@@ -852,7 +852,7 @@ def _asset_flow(asset_type, dest_dir):
 
 def livearea_menu(project_cfg):
     project_dir = Path(project_cfg["_project_dir"])
-    dest_dir = project_dir / "extras" / "livearea"
+    dest_dir = project_dir / project_cfg.get("livearea_dir", "extras/livearea")
 
     def make_flow(asset_type):
         return lambda: _asset_flow(asset_type, dest_dir)

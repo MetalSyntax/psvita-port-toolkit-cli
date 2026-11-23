@@ -1612,6 +1612,9 @@ cmake-build-*/
 # Pseudo-C decompilado del/los .so (derivado, regenerable con devrvk/so-decompiler)
 /decompiled/*/ghidra/
 
+# Desensamblado exportado por `psvita-toolkit disasm` (derivado del binario original)
+/decompiled/disasm/
+
 # Librerías .so propietarias del juego original
 lib/*.so
 lib/**/*.so
@@ -2238,14 +2241,19 @@ def decompile_macho(project_dir, exec_path=None, skip_ghidra=False):
             input_bin = exec_path
 
     print(t("init_port.decompiling_so", name=exec_path.name, abi=arch))
-    # ponytail: assumes devrvk/so-decompiler's Ghidra headless auto-detects Mach-O; verify on first IPA, else wire analyzeHeadless directly.
+    # The image's `decompile` wrapper kills Ghidra after 600 s and then runs angr (hours on a full game
+    # executable), so analyzeHeadless is called directly: Ghidra's Mach-O loader handles the import.
     try:
         r = subprocess.run([
             "docker", "run", "--rm", "--platform", "linux/amd64",
             "-v", f"{input_bin.parent}:/input", "-v", f"{ghidra_out}:/output",
-            "devrvk/so-decompiler", "decompile", f"/input/{input_bin.name}", "/output",
+            "--entrypoint", "/opt/ghidra_11.1_PUBLIC/support/analyzeHeadless",
+            "devrvk/so-decompiler", "/tmp", "macho", "-import", f"/input/{input_bin.name}",
+            "-scriptPath", "/decompile/scripts", "-postScript", "Decompiler.java", "/output/out_ghidra.c",
+            "-deleteProject",
         ])
-        result["ghidra_ok"] = r.returncode == 0
+        out_c = ghidra_out / "out_ghidra.c"
+        result["ghidra_ok"] = r.returncode == 0 and out_c.is_file() and out_c.stat().st_size > 0
         print(t("init_port.so_decompile_ok", path=ghidra_out) if result["ghidra_ok"]
               else t("init_port.so_decompile_failed", name=exec_path.name))
     except KeyboardInterrupt:

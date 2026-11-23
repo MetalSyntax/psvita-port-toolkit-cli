@@ -273,7 +273,9 @@ def _find_so(project_dir, project_cfg=None, so_path=None):
 
     candidates = list_so_candidates(project_dir)
     if not candidates:
-        return {"error": "not_found"}
+        from .init_port import find_macho_executable  # iOS ports: the only native binary is the Mach-O
+        macho = find_macho_executable(project_dir)
+        return {"path": str(macho)} if macho else {"error": "not_found"}
     if len(candidates) == 1:
         return {"path": candidates[0]}
     return {"error": "ambiguous", "candidates": candidates}
@@ -307,6 +309,18 @@ def _load_full_symbols(so_path):
     @return List of `[addr, size, raw_name, demangled_name]` sorted by address, or
             `None` if `arm-vita-eabi-nm` isn't on PATH.
     """
+    if _is_macho(so_path):
+        nm = shutil.which("nm")
+        if not nm:
+            return None
+        r = subprocess.run([nm, "-n", so_path], capture_output=True, text=True, errors="ignore")
+        out = []
+        for line in r.stdout.splitlines():
+            parts = line.split(None, 2)
+            if len(parts) == 3 and parts[1] in ("t", "T"):
+                out.append([int(parts[0], 16), 0, parts[2], parts[2]])
+        return out
+
     nm = shutil.which("arm-vita-eabi-nm")
     if not nm:
         return None
@@ -405,6 +419,33 @@ def resolve_symbol(so_path, query, range_override=None):
     }
 
 
+def _is_macho(path):
+    """!
+    @brief True for a Mach-O binary (thin 32/64-bit or fat), which objdump can't read but otool can.
+    """
+    try:
+        with open(path, "rb") as fp:
+            magic = fp.read(4)
+    except OSError:
+        return False
+    return magic in (b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+
+
+def _otool_text(path):
+    """!
+    @brief Full `__TEXT,__text` disassembly of a Mach-O via `otool -tV` (stub calls symbolized).
+    @return `(text, error)`; error is `"otool_missing"` or otool's stderr.
+    """
+    # ponytail: stripped binaries lose the Thumb bit per function, so otool decodes everything as ARM; Thumb code needs Ghidra's view.
+    otool = shutil.which("otool")
+    if not otool:
+        return None, "otool_missing"
+    r = subprocess.run([otool, "-tV", path], capture_output=True, text=True, errors="ignore")
+    if r.returncode != 0:
+        return None, (r.stderr or "unknown otool error").strip()
+    return r.stdout.split("\n", 1)[-1].strip("\n"), None
+
+
 def _disassemble_range(so_path, address, size):
     """!
     @brief Disassemble `[address, address+size)` as Thumb-2 code via
@@ -415,6 +456,14 @@ def _disassemble_range(so_path, address, size):
     @param size Number of bytes to cover.
     @return `(disassembly_text, error_message)` -- `error_message` is `None` on success.
     """
+    if _is_macho(so_path):
+        text, err = _otool_text(so_path)
+        if err:
+            return None, err
+        start, end = address & ~1, (address & ~1) + max(size, 2)
+        out = [l for l in text.splitlines() if re.match(r"[0-9a-f]{8}\t", l) and start <= int(l[:8], 16) < end]
+        return "\n".join(out), None
+
     objdump = shutil.which("arm-vita-eabi-objdump")
     if not objdump:
         return None, "objdump_missing"
@@ -435,6 +484,31 @@ def _disassemble_range(so_path, address, size):
         if in_text:
             lines.append(line)
     return "\n".join(lines).strip("\n"), None
+
+
+def _objc_method_name(project_dir, address):
+    """!
+    @brief Ghidra name of the ObjC method whose IMP is `address` (`Class::sel_with_colons_`), from the
+           `otool -ov` dump in `decompiled/macho/objc_classes.txt`; Ghidra labels these by selector, not `FUN_<hex>`.
+    @return The name, or `None` (not a Mach-O port, dump missing, or not a method IMP).
+    """
+    dump = os.path.join(str(project_dir), "decompiled", "macho", "objc_classes.txt")
+    if not os.path.isfile(dump):
+        return None
+    cls, sel = None, None
+    with open(dump, errors="ignore") as fp:
+        for line in fp:
+            m = re.match(r"( +)name +0x[0-9a-f]+ (\S+)$", line)
+            if m:
+                if len(m.group(1)) == 8:
+                    cls = m.group(2)
+                else:
+                    sel = m.group(2)
+                continue
+            m = re.match(r" +imp +0x([0-9a-f]+)$", line)
+            if m and sel and cls and int(m.group(1), 16) == (address & ~1):
+                return f"{cls}::{sel.replace(':', '_')}"
+    return None
 
 
 def _find_ghidra_snippet(project_dir, terms, max_lines=600):
@@ -524,7 +598,8 @@ def build_disasm_bundle(project_cfg, query, global_cfg=None, so_path=None, range
     if derr:
         return {"error": "objdump_failed", "detail": derr}
 
-    terms = [resolved.get("raw_name"), resolved.get("demangled_name"), f"FUN_{resolved['address']:06x}"]
+    terms = [resolved.get("raw_name"), resolved.get("demangled_name"), f"FUN_{resolved['address']:06x}",
+             _objc_method_name(project_dir, resolved["address"])]
     ghidra_path, ghidra_line, ghidra_snippet = _find_ghidra_snippet(project_dir, terms)
 
     label = resolved.get("demangled_name") or resolved.get("raw_name") or query
@@ -705,21 +780,26 @@ def build_full_disasm_bundle(project_cfg, global_cfg=None, so_path=None):
         return {"error": "so_ambiguous", "candidates": so_result["candidates"]}
     so_path = so_result["path"]
 
-    objdump = shutil.which("arm-vita-eabi-objdump")
-    if not objdump:
-        return {"error": "objdump_missing"}
+    if _is_macho(so_path):
+        disasm_text, err = _otool_text(so_path)
+        if err:
+            return {"error": "objdump_failed", "detail": err}
+    else:
+        objdump = shutil.which("arm-vita-eabi-objdump")
+        if not objdump:
+            return {"error": "objdump_missing"}
 
-    r = subprocess.run([objdump, "-d", "-Mforce-thumb", "-C", so_path], capture_output=True, text=True)
-    if r.returncode != 0:
-        return {"error": "objdump_failed", "detail": (r.stderr or "unknown objdump error").strip()}
+        r = subprocess.run([objdump, "-d", "-Mforce-thumb", "-C", so_path], capture_output=True, text=True)
+        if r.returncode != 0:
+            return {"error": "objdump_failed", "detail": (r.stderr or "unknown objdump error").strip()}
 
-    lines, in_text = [], False
-    for line in r.stdout.splitlines():
-        if "Disassembly of section" in line:
-            in_text = True
-        if in_text:
-            lines.append(line)
-    disasm_text = "\n".join(lines).strip("\n")
+        lines, in_text = [], False
+        for line in r.stdout.splitlines():
+            if "Disassembly of section" in line:
+                in_text = True
+            if in_text:
+                lines.append(line)
+        disasm_text = "\n".join(lines).strip("\n")
 
     symbols = _load_full_symbols(so_path) or []
     index_lines = [f"0x{addr:08x}  {demangled}" for addr, _size, _raw, demangled in symbols]

@@ -397,10 +397,18 @@ def _livearea_ok(project_dir):
     """!
     @brief Whether a port's LiveArea assets are present and pass validation.
     @param project_dir Path to the port's project directory.
-    @return `True` only if `extras/livearea/` exists and every asset
+    @return `True` only if `extras/livearea/` (or configured `livearea_dir`) exists and every asset
             `livearea.validate_livearea_dir()` checks reports OK.
     """
-    dest_dir = Path(project_dir) / "extras" / "livearea"
+    rel_livearea = "extras/livearea"
+    cfg_file = Path(project_dir) / ".psvita-toolkit.json"
+    if cfg_file.exists():
+        try:
+            with open(cfg_file) as f:
+                rel_livearea = json.load(f).get("livearea_dir", "extras/livearea")
+        except Exception:
+            pass
+    dest_dir = Path(project_dir) / rel_livearea
     if not dest_dir.is_dir():
         return False
     checks = livearea.validate_livearea_dir(dest_dir)

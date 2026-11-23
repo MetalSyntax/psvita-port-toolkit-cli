@@ -341,7 +341,7 @@ def _list_assets(project_cfg):
     @param project_cfg Per-project config dict.
     @return list of `{name, ok, detail}` dicts.
     """
-    dest_dir = Path(project_cfg["_project_dir"]) / "extras" / "livearea"
+    dest_dir = Path(project_cfg["_project_dir"]) / project_cfg.get("livearea_dir", "extras/livearea")
     checks = livearea.validate_livearea_dir(dest_dir)
     return [{"name": name, "ok": ok, "detail": detail} for name, ok, detail in checks]
 
@@ -509,7 +509,7 @@ def _make_handler(project_cfg, global_cfg, broadcaster, perf_broadcaster):
                 self.end_headers()
                 self.wfile.write(data)
             elif self.path == "/api/livearea/preview":
-                dest_dir = Path(project_cfg["_project_dir"]) / "extras" / "livearea"
+                dest_dir = Path(project_cfg["_project_dir"]) / project_cfg.get("livearea_dir", "extras/livearea")
                 buf = io.BytesIO()
                 livearea.render_preview_composite(dest_dir).save(buf, format="PNG")
                 data = buf.getvalue()
