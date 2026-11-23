@@ -27,6 +27,8 @@ menu chrome (`errcode.*` keys) goes through `t()` normally.
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from . import i18n
@@ -611,6 +613,14 @@ def run_lookup(query):
     """
     result = explain(query)
     _print_result(result, query)
+    if result["status"] == "not_found":
+        # Fallback: shoui520/psp2_err has a larger offline DB (display codes, decimal, SCE_* names).
+        exe = shutil.which("psp2_err")
+        if exe:
+            r = subprocess.run([exe, query], capture_output=True, text=True)
+            if r.returncode == 0 and r.stdout.strip():
+                print(f"\n{C.DIM}psp2_err:{C.RESET}\n{r.stdout.rstrip()}")
+                return 0
     return 0 if result["status"] == "ok" else 1
 
 

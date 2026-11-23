@@ -58,6 +58,16 @@ STRINGS = {
         "en": "Optional v4 tools (GDB, texture transcoding)",
         "pt": "Ferramentas opcionais v4 (GDB, transcodificação de texturas)",
     },
+    "doctor.section.ecosystem": {
+        "es": "Ecosistema IA/retail opcional (vita-agent-use, psp2-tooling, DMR, CapUnlocker)",
+        "en": "Optional AI/retail ecosystem (vita-agent-use, psp2-tooling, DMR, CapUnlocker)",
+        "pt": "Ecossistema IA/retail opcional (vita-agent-use, psp2-tooling, DMR, CapUnlocker)",
+    },
+    "doctor.hint.ecosystem_missing": {
+        "es": "no encontrado (opcional) -- ver docs/dev-notes/ecosystem-tools.md",
+        "en": "not found (optional) -- see docs/dev-notes/ecosystem-tools.md",
+        "pt": "não encontrado (opcional) -- ver docs/dev-notes/ecosystem-tools.md",
+    },
     "doctor.hint.gdb_multiarch_missing": {
         "es": "no encontrado (opcional) -- necesario para usar el script de gdb_bridge.py",
         "en": "not found (optional) -- needed to actually use gdb_bridge.py's generated script",
@@ -416,6 +426,43 @@ def _check_v4_tools():
     return checks
 
 
+_ECOSYSTEM_CLIS = ("psp2-core-parse", "psp2-gpucrash-parse", "psp2_err")
+_ECOSYSTEM_PATHS = (
+    "vita-agent-use/client/vita_agent.py",
+    "vita-agent-use/build/vita_agent_kernel.skprx",
+    "psp2-tooling/devkit/parse_core.py",
+    "libperf/build/libperf.skprx",
+    "psp2-cex-gpues4-prof/build/libpsp2_gpuprof_client.a",
+    "vkvita/CMakeLists.txt",
+    "plugins/DMR.skprx",
+    "plugins/CapUnlocker.skprx",
+)
+
+
+def _check_ecosystem():
+    """!
+    @brief Optional tools from the 2026 AI-porting guides (shoui520, Grarak,
+           GrapheneCt, DrDecki) cloned under ~/vita-tools. All WARN, never FAIL.
+    @return list of check tuples.
+    """
+    checks = []
+    for name in _ECOSYSTEM_CLIS:
+        found = shutil.which(name)
+        checks.append(_check(name, OK if found else WARN,
+                              t("doctor.detail.found_at", path=found) if found
+                              else t("doctor.hint.ecosystem_missing")))
+    base = Path.home() / "vita-tools"
+    for rel in _ECOSYSTEM_PATHS:
+        path = base / rel
+        checks.append(_check(rel, OK if path.exists() else WARN,
+                              t("doctor.detail.found_at", path=path) if path.exists()
+                              else t("doctor.hint.ecosystem_missing")))
+    cfg_dir = os.environ.get("VITA_AGENT_CONFIG_DIR", "")
+    checks.append(_check("VITA_AGENT_CONFIG_DIR", OK if cfg_dir else WARN,
+                          cfg_dir or t("doctor.hint.ecosystem_missing")))
+    return checks
+
+
 _REQUIRED_PY_PACKAGES = (("Pillow", "PIL"),)
 _OPTIONAL_PY_PACKAGES = (("deep-translator", "deep_translator"),)
 
@@ -454,6 +501,7 @@ def run_checks(global_cfg):
         (t("doctor.section.docker"), _check_docker()),
         (t("doctor.section.decompilers"), _check_jadx()),
         (t("doctor.section.v4_tools"), _check_v4_tools()),
+        (t("doctor.section.ecosystem"), _check_ecosystem()),
         (t("doctor.section.python"), _check_python_packages()),
     ]
 

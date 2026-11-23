@@ -19,6 +19,7 @@ memory-base auto-detection strategy.
 import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -215,6 +216,11 @@ STRINGS = {
         "en": "Seg{num}: 0x{start:x} (size 0x{size:x})",
         "pt": "Seg{num}: 0x{start:x} (tamanho 0x{size:x})",
     },
+    "crash_analyzer.deep_parse_saved": {
+        "es": "[+] Análisis profundo ({tool}) guardado en: {path}",
+        "en": "[+] Deep analysis ({tool}) saved to: {path}",
+        "pt": "[+] Análise profunda ({tool}) salva em: {path}",
+    },
     "crash_analyzer.report_saved": {
         "es": "[+] Reporte guardado en: {path}",
         "en": "[+] Report saved to: {path}",
@@ -343,6 +349,35 @@ def _ensure_toolchain(global_cfg):
         print(f"{C.DIM}{t('crash_analyzer.toolchain_load_hint')}{C.RESET}")
         return None
     return True
+
+
+def _deep_parse(dump_path):
+    """!
+    @brief Run shoui520's psp2-core-parse (or psp2-gpucrash-parse for GPUCRASH
+           dumps) when installed and save its `analyze` output next to the dump.
+    @details Optional: it decodes what vita-parse-core does not (kernel objects,
+           wait cycles, budgets, GPU state). Silently skipped when not installed.
+    @param dump_path Path to the `.psp2dmp`.
+    @return Path of the saved file, or None.
+    """
+    tool = "psp2-gpucrash-parse" if "GPUCRASH" in os.path.basename(dump_path).upper() else "psp2-core-parse"
+    exe = shutil.which(tool)
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe, "analyze", dump_path], capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if not r.stdout.strip():
+        return None
+    out = f"{dump_path}.{tool}.txt"
+    try:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(r.stdout)
+    except OSError:
+        return None
+    print(f"{C.GREEN}{t('crash_analyzer.deep_parse_saved', tool=tool, path=out)}{C.RESET}")
+    return out
 
 
 def _demangle(name):
@@ -960,6 +995,7 @@ def analyze(project_cfg, dump_path, global_cfg=None, elf_path=None, so_path=None
         print(f"{C.RED}{t('crash_analyzer.dump_not_found', path=dump_path)}{C.RESET}")
         return False
 
+    _deep_parse(dump_path)
     report = []
 
     def log(msg=""):
